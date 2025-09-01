@@ -89,6 +89,162 @@ def print_problem_statistics(problem: rcpsp_pb2.RcpspProblem):
             print(f"    - {tasks_with_delay} tasks with successor delays")
 
 
+def print_schedule_by_task(
+    solver: cp_model.CpSolver,
+    all_active_tasks: list[int],
+    source: int,
+    sink: int,
+    task_starts: dict,
+    task_durations: dict,
+    task_ends: dict,
+) -> None:
+    """
+    タスクごとにスケジュール（開始、期間、終了時刻）を表示する関数
+    """
+    print("Solution Found:")
+    print(f"Optimal Makespan: {solver.objective_value}")
+    print("--------------------------------------------------")
+    print("--- Schedule by Task ---")
+
+    # 開始ダミータスクを表示
+    source_start_val = solver.value(task_starts[source])
+    print(
+        f"Task {source:2}: "
+        f"Start={source_start_val:<3} "
+        f"Duration=0   "
+        f"End={source_start_val:<3}  (Project Start)"
+    )
+
+    # 通常のタスクを表示（IDでソートして見やすくする）
+    for t in sorted(all_active_tasks):
+        start_val = solver.value(task_starts[t])
+        duration_val = solver.value(task_durations[t])
+        end_val = solver.value(task_ends[t])
+        print(
+            f"Task {t:2}: "
+            f"Start={start_val:<3} "
+            f"Duration={duration_val:<3} "
+            f"End={end_val:<3}"
+        )
+
+    # 終了ダミータスクを表示
+    sink_start_val = solver.value(task_starts[sink])
+    print(
+        f"Task {sink:2}: "
+        f"Start={sink_start_val:<3} "
+        f"Duration=0   "
+        f"End={sink_start_val:<3}  (Project End / Makespan)"
+    )
+
+
+def print_schedule_by_time_step(
+    solver: cp_model.CpSolver,
+    problem: rcpsp_pb2.RcpspProblem,
+    all_active_tasks: list[int],
+    task_starts: dict,
+    task_ends: dict,
+    task_to_resource_demands: dict,
+    all_resources: range,
+):
+    """
+    時刻ごとに実行中のタスクとリソースの状態を表示する関数（再修正版）
+    Reservoirの正しい仕様（初期値0、生産が正）に基づいて表示を修正
+    """
+    print("\n--- Schedule by Time Step ---")
+    makespan = int(solver.objective_value)
+
+    # 時刻を0からMakespanまで1ずつ進める
+    for t in range(makespan + 1):
+        running_tasks = []
+        # 各タスクが現在の時刻 t で実行中か確認
+        for task_id in all_active_tasks:
+            start_time = solver.value(task_starts[task_id])
+            end_time = solver.value(task_ends[task_id])
+            if start_time <= t < end_time:
+                running_tasks.append(task_id)
+
+        print(f"\n[Time: {t}]")
+        if not running_tasks:
+            print("  Running Tasks: None")
+        else:
+            print(f"  Running Tasks: {sorted(running_tasks)}")
+
+        # 各リソースの状態を計算して表示
+        print("  Resource Status:")
+        for res_id in all_resources:
+            resource = problem.resources[res_id]
+            total_capacity = resource.max_capacity
+
+            if total_capacity == -1:
+                print(f"    - (Infinite)    Resource {res_id}: Infinite capacity")
+                continue
+
+            # --- リソースの種類に応じて計算を分岐 ---
+
+            # 1. Renewable Resource
+            if resource.renewable:
+                used_capacity = 0
+                for task_id in running_tasks:
+                    if (
+                        task_id in task_to_resource_demands
+                        and len(task_to_resource_demands[task_id]) > res_id
+                    ):
+                        used_capacity += solver.value(
+                            task_to_resource_demands[task_id][res_id]
+                        )
+                remaining_capacity = total_capacity - used_capacity
+                print(
+                    f"    - (Renewable)   Resource {res_id}:"
+                    f" Used={used_capacity}/{total_capacity}"
+                    f" (Remaining={remaining_capacity})"
+                )
+
+            # 2. Reservoir Resource
+            elif problem.is_consumer_producer:
+                # 仕様に基づき、レベル(累積需要)は0から開始する。
+                # 生産が正、消費が負の需要として、時刻tまでに開始したタスクの需要を合計する。
+                cumulative_demand = 0
+                for task_id in all_active_tasks:
+                    start_time = solver.value(task_starts[task_id])
+                    if start_time <= t:
+                        if (
+                            task_id in task_to_resource_demands
+                            and len(task_to_resource_demands[task_id]) > res_id
+                        ):
+                            demand = solver.value(
+                                task_to_resource_demands[task_id][res_id]
+                            )
+                            cumulative_demand += demand
+                
+                min_level = resource.min_capacity
+                max_level = resource.max_capacity
+                print(
+                    f"    - (Reservoir)   Resource {res_id}:"
+                    f" Level={cumulative_demand:4}"
+                    f" (Bounds: [{min_level}, {max_level}])"
+                )
+
+            # 3. Simple Non-renewable Resource
+            else:
+                consumed_so_far = 0
+                for task_id in all_active_tasks:
+                    start_time = solver.value(task_starts[task_id])
+                    if start_time <= t:
+                        if (
+                            task_id in task_to_resource_demands
+                            and len(task_to_resource_demands[task_id]) > res_id
+                        ):
+                            consumed_so_far += solver.value(
+                                task_to_resource_demands[task_id][res_id]
+                            )
+                remaining = total_capacity - consumed_so_far
+                print(
+                    f"    - (NonRenewable) Resource {res_id}:"
+                    f" Remaining={remaining}/{total_capacity}"
+                    f" (Consumed={consumed_so_far})"
+                )
+
+
 def solve_rcpsp(
     problem: rcpsp_pb2.RcpspProblem,
     proto_file: str,
@@ -375,7 +531,38 @@ def solve_rcpsp(
     solver.parameters.log_search_progress = True
 
     # Solve the model.
-    solver.solve(model)
+    status = solver.solve(model)
+
+    # Print Schedule
+    if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+        print("Solution Found:")
+        print(f"Optimal Makespan: {solver.objective_value}")
+        print("--------------------------------------------------")
+
+        # 1. タスクごとのスケジュールを表示
+        print_schedule_by_task(
+            solver=solver,
+            all_active_tasks=all_active_tasks,
+            source=source,
+            sink=sink,
+            task_starts=task_starts,
+            task_durations=task_durations,
+            task_ends=task_ends,
+        )
+
+        # 2. 時刻ごとのスケジュールを表示
+        print_schedule_by_time_step(
+            solver=solver,
+            problem=problem,
+            all_active_tasks=all_active_tasks,
+            task_starts=task_starts,
+            task_ends=task_ends,
+            task_to_resource_demands=task_to_resource_demands,
+            all_resources=all_resources,
+        )
+
+    elif status == cp_model.INFEASIBLE:
+        print("No solution found.")
 
 
 def main(_):
