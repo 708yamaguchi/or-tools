@@ -31,6 +31,10 @@ from ortools.sat.python import cp_model
 from ortools.scheduling import rcpsp_pb2
 from ortools.scheduling.python import rcpsp
 
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import numpy as np
+
 _INPUT = flags.DEFINE_string("input", "", "Input file to parse and solve.")
 _OUTPUT_PROTO = flags.DEFINE_string(
     "output_proto", "", "Output file to write the cp_model proto to."
@@ -218,6 +222,77 @@ def print_schedule_by_time_step(
                     f" Remaining={remaining}/{total_capacity}".ljust(46),
                     f" (Consumed={consumed_so_far})"
                 )
+
+
+def visualize_schedule(
+    solver: cp_model.CpSolver,
+    all_active_tasks: list[int],
+    task_starts: dict,
+    task_durations: dict,
+    title: str = "Task Schedule Gantt Chart",
+) -> None:
+    """
+    OR-Toolsのスケジューリング結果をガントチャートで可視化する関数
+
+    Args:
+        solver: 解かれたCpSolverオブジェクト
+        all_active_tasks: スケジューリング対象の全アクティブタスクのリスト
+        task_starts: 各タスクの開始時間を示す変数を含む辞書
+        task_durations: 各タスクの期間を示す変数を含む辞書
+        title: グラフのタイトル
+    """
+    # --- 1. データの準備 ---
+    # タスクIDでソートして、グラフのY軸の順序を整える
+    tasks = sorted(all_active_tasks)
+    
+    # ソルバーから各タスクの開始時間、期間、終了時間を取得
+    starts = [solver.value(task_starts[t]) for t in tasks]
+    durations = [solver.value(task_durations[t]) for t in tasks]
+    ends = [s + d for s, d in zip(starts, durations)]
+
+    # --- 2. グラフの描画 ---
+    # 描画領域とサブプロットを作成
+    fig, ax = plt.subplots(figsize=(12, len(tasks) * 0.5 + 2))
+
+    # 各タスクに異なる色を割り当てる
+    colors = cm.viridis(np.linspace(0, 1, len(tasks)))
+
+    # 水平棒グラフ（ガントチャート）を作成
+    # y: 縦軸の位置, width: 棒の幅（期間）, left: 棒の開始位置
+    bars = ax.barh(
+        y=[f"Task {t}" for t in tasks],  # Y軸のラベル
+        width=durations,
+        left=starts,
+        edgecolor="black",
+        color=colors,
+        height=0.6,  # 棒の太さ
+    )
+
+    # 各バーにタスク情報をテキストで追加
+    for bar, start, end in zip(bars, starts, ends):
+        text_y = bar.get_y() + bar.get_height() / 2
+        ax.text(
+            (start + end) / 2,  # テキストのX位置 (バーの中央)
+            text_y,
+            f"{start} -> {end}", # 表示するテキスト
+            va='center',         # 垂直方向の中央揃え
+            ha='center',         # 水平方向の中央揃え
+            color='white',       # テキストの色
+            fontweight='bold',
+        )
+
+    # --- 3. グラフの装飾 ---
+    # メイクスパン（総所要時間）を取得
+    makespan = int(solver.objective_value)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Task")
+    ax.set_title(title)
+    ax.set_xticks(range(makespan + 2))
+    ax.set_xlim(0, makespan + 1)
+    ax.invert_yaxis()
+    ax.grid(True, which='major', axis='x', linestyle='--', linewidth=0.5)
+    plt.tight_layout()
+    plt.show()                
 
 
 def solve_rcpsp(
@@ -563,7 +638,6 @@ def solve_rcpsp(
             task_durations=task_durations,
             task_ends=task_ends,
         )
-
         # 2. 時刻ごとのスケジュールを表示
         print_schedule_by_time_step(
             solver=solver,
@@ -574,6 +648,11 @@ def solve_rcpsp(
             task_to_resource_demands=task_to_resource_demands,
             all_resources=all_resources,
         )
+        visualize_schedule(
+            solver=solver,
+            all_active_tasks=all_active_tasks,
+            task_starts=task_starts,
+            task_durations=task_durations)
 
     elif status == cp_model.INFEASIBLE:
         print("No solution found.")
