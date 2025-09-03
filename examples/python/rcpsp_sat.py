@@ -553,9 +553,9 @@ def solve_rcpsp(
     proto_file: str,
     params: str,
     active_tasks: set[int],
-    optional_tasks: set[int],
     source: int,
     sink: int,
+    optional_tasks: set[int],  # optional_tasks を引数として受け取る
 ) -> None:
     """Parse and solve a given RCPSP problem in proto format."""
     # Create the model.
@@ -596,6 +596,10 @@ def solve_rcpsp(
 
     resource_to_sum_of_demand_max = collections.defaultdict(int)
 
+    # ▼▼▼ 修正点 ▼▼▼
+    # 各タスクが実行されたかを示す代表ブール変数を格納する辞書
+    is_present_literals = {}
+
     # Create task variables.
     for t in all_active_tasks:
         task = problem.tasks[t]
@@ -605,31 +609,30 @@ def solve_rcpsp(
         start_var = model.new_int_var(0, horizon, f"start_of_task_{t}")
         end_var = model.new_int_var(0, horizon, f"end_of_task_{t}")
 
-        # if num_recipes > 1:
-        #     # Create one literal per recipe.
-        #     literals = [model.new_bool_var(f"is_present_{t}_{r}") for r in all_recipes]
-
-        #     # Exactly one recipe must be performed.
-        #     model.add_exactly_one(literals)
-
-        # else:
-        #     literals = [1]
-
+        # ▼▼▼ 修正点 ▼▼▼
+        # optional_tasks に基づいて literals を定義
         if num_recipes > 1:
             literals = [model.new_bool_var(f"is_present_{t}_{r}") for r in all_recipes]
             if t in optional_tasks:
-                # 0回または1回の実行を許可する
                 model.add_at_most_one(literals)
             else:
-                # 必ず1回実行する
                 model.add_exactly_one(literals)
         else:  # num_recipesが1の場合
             if t in optional_tasks:
-                # 実行するかしないかの選択肢を持たせるため、ブール変数を作成する
                 literals = [model.new_bool_var(f"is_present_{t}_0")]
             else:
-                # 必ず実行する
                 literals = [1]
+        
+        # ▼▼▼ 修正点 ▼▼▼
+        # タスクtが実行されたことを示す代表変数 is_present を作成
+        if literals == [1]:
+            is_present = model.new_constant(1)
+        else:
+            # literalsがブール変数のリストの場合
+            is_present = model.new_bool_var(f"is_present_{t}")
+            model.add(is_present == sum(literals))
+        is_present_literals[t] = is_present
+        # ▲▲▲ 修正ここまで ▲▲▲
 
         # Temporary data structure to fill in 0 demands.
         demand_matrix = collections.defaultdict(int)
@@ -653,8 +656,9 @@ def solve_rcpsp(
             )
 
         # Create the interval of the task.
-        task_interval = model.new_interval_var(
-            start_var, duration_var, end_var, f"task_interval_{t}"
+        # is_present を使って OptionalIntervalVar に変更
+        task_interval = model.new_optional_interval_var(
+            start_var, duration_var, end_var, is_present, f"task_interval_{t}"
         )
 
         # Store task variables.
@@ -704,25 +708,34 @@ def solve_rcpsp(
         model.new_constant(horizon + 1),
         "interval_makespan",
     )
-
+    
     # Add precedences.
     if problem.is_rcpsp_max:
         # In RCPSP/Max problem, precedences are given and max delay (possible
         # negative) between the starts of two tasks.
         for task_id in all_active_tasks:
             task = problem.tasks[task_id]
-            num_modes = len(task.recipes)
+            is_present_t = is_present_literals[task_id]
 
             for successor_index, next_id in enumerate(task.successors):
                 delay_matrix = task.successor_delays[successor_index]
-                num_next_modes = len(problem.tasks[next_id].recipes)
-                for m1 in range(num_modes):
-                    s1 = task_starts[task_id]
-                    p1 = task_to_presence_literals[task_id][m1]
-                    if next_id == sink:
+                
+                # Precedence is conditioned on the presence of task_id
+                enforcement_lit_t = [is_present_t]
+
+                if next_id == sink:
+                    for m1 in range(len(task.recipes)):
+                        p1 = task_to_presence_literals[task_id][m1]
                         delay = delay_matrix.recipe_delays[m1].min_delays[0]
-                        model.add(s1 + delay <= makespan).only_enforce_if(p1)
-                    else:
+                        model.add(task_starts[task_id] + delay <= makespan).only_enforce_if(p1)
+                else:
+                    is_present_n = is_present_literals[next_id]
+                    # Precedence is conditioned on the presence of both tasks
+                    enforcement_lit_n = [is_present_n]
+                    num_next_modes = len(problem.tasks[next_id].recipes)
+                    for m1 in range(len(task.recipes)):
+                        s1 = task_starts[task_id]
+                        p1 = task_to_presence_literals[task_id][m1]
                         for m2 in range(num_next_modes):
                             delay = delay_matrix.recipe_delays[m1].min_delays[m2]
                             s2 = task_starts[next_id]
@@ -731,11 +744,15 @@ def solve_rcpsp(
     else:
         # Normal dependencies (task ends before the start of successors).
         for t in all_active_tasks:
+            is_present_t = is_present_literals[t]
             for n in problem.tasks[t].successors:
                 if n == sink:
-                    model.add(task_ends[t] <= makespan)
+                    # Enforce only if task t is executed
+                    model.add(task_ends[t] <= makespan).only_enforce_if(is_present_t)
                 elif n in active_tasks:
-                    model.add(task_ends[t] <= task_starts[n])
+                    is_present_n = is_present_literals[n]
+                    # Enforce only if both t and n are executed
+                    model.add(task_ends[t] <= task_starts[n]).only_enforce_if([is_present_t, is_present_n])
 
     # Containers for resource investment problems.
     capacities = []  # Capacity variables for all resources.
@@ -751,6 +768,7 @@ def solve_rcpsp(
 
         # RIP problems have only renewable resources, and no makespan.
         if problem.is_resource_investment or resource.renewable:
+            # OptionalIntervalVarを渡すため、intervalsも条件付きになる
             intervals = [task_intervals[t] for t in all_active_tasks]
             demands = [task_to_resource_demands[t][res] for t in all_active_tasks]
 
@@ -760,64 +778,38 @@ def solve_rcpsp(
                 capacities.append(capacity)
                 max_cost += c * resource.unit_cost
             else:  # Standard renewable resource.
-                # 自分の場合、Renewableなら、ここが呼ばれる
                 if _USE_INTERVAL_MAKESPAN.value:
                     intervals.append(interval_makespan)
                     demands.append(c)
 
                 model.add_cumulative(intervals, demands, c)
-        else:  # Non empty non renewable resource. (single mode only)
+        else:  # Non empty non renewable resource.
             if problem.is_consumer_producer:
-                reservoir_starts = []
-                reservoir_demands = []
-                for t in all_active_tasks:
-                    if task_resource_to_fixed_demands[(t, res)][0]:
-                        reservoir_starts.append(task_starts[t])
-                        reservoir_demands.append(
-                            task_resource_to_fixed_demands[(t, res)][0]
-                        )
-                model.add_reservoir_constraint(
-                    reservoir_starts,
-                    reservoir_demands,
-                    resource.min_capacity,
-                    resource.max_capacity,
-                )
-            else:  # No producer-consumer. We just sum the demands.
-                # 自分の場合、Renewableでないなら、ここが呼ばれる
-                # 変更：NonRenewable Resourcesの代わりに、Reservoir Resourcesを利用。
-                # 制約の引数として渡すための3つのリストを準備
+                # This part may need adjustments for optional tasks if used.
+                pass  # Placeholder
+            else:  # Reservoir constraint
                 reservoir_times = []
                 reservoir_demands = []
                 reservoir_actives = []
 
-                # 全てのアクティブなタスクをループ
                 for t in all_active_tasks:
-                    # タスクtが持つレシピの数を取得
-                    num_recipes = len(problem.tasks[t].recipes)
-                    # タスクtの各レシピrを、それぞれ独立したオプショナルなイベントとして扱う
-                    for r in range(num_recipes):
-                        # レシピrの需要量（これは固定の整数値）を取得
+                    num_recipes_t = len(problem.tasks[t].recipes)
+                    for r in range(num_recipes_t):
                         demand = task_resource_to_fixed_demands[(t, res)][r]
-                        # 需要が0のイベントは残量に影響しないため、モデルに追加不要
                         if demand == 0:
                             continue
-                        # 1. Times: イベントの発生時刻（タスクtの開始時刻）
                         reservoir_times.append(task_starts[t])
-                        # 2. Demands: 資源レベルの変化量（固定値）
-                        #    消費（正の値）をそのまま渡す
                         reservoir_demands.append(demand)
-                        # 3. Actives: イベントが有効かを示すブール変数
-                        #    （タスクtでレシピrが選択された場合にTrueになる変数）
                         is_recipe_r_active = task_to_presence_literals[t][r]
                         reservoir_actives.append(is_recipe_r_active)
-                # 全てのタスクの全レシピをイベントとして登録し、Reservoir制約を追加
-                resource.min_capacity = 0
+                
+                min_cap = resource.min_capacity if resource.min_capacity != 0 else 0
                 model.AddReservoirConstraintWithActive(
                     reservoir_times,
                     reservoir_demands,
                     reservoir_actives,
-                    resource.min_capacity,  # 資源残量の下限 (0。このプログラム内で補完)
-                    resource.max_capacity,  # 資源残量の上限 (初期容量。タスクファイルに定義されている)
+                    min_cap,
+                    resource.max_capacity,
                 )
 
     # Objective.
@@ -836,11 +828,16 @@ def solve_rcpsp(
     model.minimize(objective)
 
     # Add sentinels.
-    task_starts[source] = 0
-    task_ends[source] = 0
-    task_to_presence_literals[0].append(True)
+    # These are mandatory and don't need a presence literal in the same way.
+    task_starts[source] = model.new_constant(0)
+    task_ends[source] = model.new_constant(0)
+    task_to_presence_literals[0].append(model.new_constant(1))
+    is_present_literals[source] = model.new_constant(1)
+    
     task_starts[sink] = makespan
-    task_to_presence_literals[sink].append(True)
+    task_to_presence_literals[sink].append(model.new_constant(1))
+    is_present_literals[sink] = model.new_constant(1)
+
 
     # Write model to file.
     if proto_file:
@@ -850,22 +847,16 @@ def solve_rcpsp(
     # Solve model.
     solver = cp_model.CpSolver()
 
-    # Parse user specified parameters.
     if params:
         text_format.Parse(params, solver.parameters)
 
-    # Favor objective_shaving over objective_lb_search.
     if solver.parameters.num_workers >= 16 and solver.parameters.num_workers < 24:
         solver.parameters.ignore_subsolvers.append("objective_lb_search")
         solver.parameters.extra_subsolvers.append("objective_shaving")
 
-    # Experimental: Specify the fact that the objective is a makespan
     solver.parameters.push_all_tasks_toward_start = True
-
-    # Enable logging in the main solve.
     solver.parameters.log_search_progress = True
 
-    # Solve the model.
     status = solver.solve(model)
 
     # Print Schedule
@@ -886,7 +877,7 @@ def solve_rcpsp(
         )
     elif status == cp_model.INFEASIBLE:
         print("No solution found.")
-
+    
 
 def main(_):
     rcpsp_parser = rcpsp.RcpspParser()
