@@ -198,7 +198,7 @@ def print_schedule_by_time_step(
                 print(
                     f"    - (Renewable)   Resource {res_id}:"
                     f" Remaining={remaining_capacity}/{total_capacity}".ljust(46),
-                    f" (Used={used_capacity})"
+                    f" (Used={used_capacity})",
                 )
             # 今回は、Renewable ResourceとReservoir Resourceしか扱わない。
             # consumer_producerでもなく、resource_investmentでもない。
@@ -215,12 +215,19 @@ def print_schedule_by_time_step(
                                 task_to_resource_demands[task_id][res_id]
                             )
                 remaining = total_capacity - consumed_so_far
-                if remaining < 0 or consumed_so_far < 0 or remaining > total_capacity or consumed_so_far > total_capacity:
-                    raise ValueError("Reservoir resource must be in [min, max] at any time.")
+                if (
+                    remaining < 0
+                    or consumed_so_far < 0
+                    or remaining > total_capacity
+                    or consumed_so_far > total_capacity
+                ):
+                    raise ValueError(
+                        "Reservoir resource must be in [min, max] at any time."
+                    )
                 print(
                     f"    - (Reservoir)   Resource {res_id}:"
                     f" Remaining={remaining}/{total_capacity}".ljust(46),
-                    f" (Consumed={consumed_so_far})"
+                    f" (Consumed={consumed_so_far})",
                 )
 
 
@@ -229,60 +236,50 @@ def visualize_schedule(
     all_active_tasks: list[int],
     task_starts: dict,
     task_durations: dict,
+    selected_recipes: dict,  # 選択されたレシピの情報を受け取る引数を追加
     title: str = "Task Schedule Gantt Chart",
 ) -> None:
     """
     OR-Toolsのスケジューリング結果をガントチャートで可視化する関数
-
-    Args:
-        solver: 解かれたCpSolverオブジェクト
-        all_active_tasks: スケジューリング対象の全アクティブタスクのリスト
-        task_starts: 各タスクの開始時間を示す変数を含む辞書
-        task_durations: 各タスクの期間を示す変数を含む辞書
-        title: グラフのタイトル
     """
     # --- 1. データの準備 ---
-    # タスクIDでソートして、グラフのY軸の順序を整える
     tasks = sorted(all_active_tasks)
-    
-    # ソルバーから各タスクの開始時間、期間、終了時間を取得
     starts = [solver.value(task_starts[t]) for t in tasks]
     durations = [solver.value(task_durations[t]) for t in tasks]
     ends = [s + d for s, d in zip(starts, durations)]
 
     # --- 2. グラフの描画 ---
-    # 描画領域とサブプロットを作成
     fig, ax = plt.subplots(figsize=(12, len(tasks) * 0.5 + 2))
-
-    # 各タスクに異なる色を割り当てる
     colors = cm.viridis(np.linspace(0, 1, len(tasks)))
-
-    # 水平棒グラフ（ガントチャート）を作成
-    # y: 縦軸の位置, width: 棒の幅（期間）, left: 棒の開始位置
     bars = ax.barh(
-        y=[f"Task {t}" for t in tasks],  # Y軸のラベル
+        y=[f"Task {t}" for t in tasks],
         width=durations,
         left=starts,
         edgecolor="black",
         color=colors,
-        height=0.6,  # 棒の太さ
+        height=0.6,
     )
 
-    # 各バーにタスク情報をテキストで追加
-    for bar, start, end in zip(bars, starts, ends):
+    # 各バーにタスク情報（実行モード）をテキストで追加
+    for bar, start, end, task_id in zip(bars, starts, ends, tasks):
         text_y = bar.get_y() + bar.get_height() / 2
+        recipe_index = selected_recipes.get(task_id, "N/A")
+        display_text = (
+            f"Mode {recipe_index + 1}"
+            if isinstance(recipe_index, int)
+            else f"Mode {recipe_index}"
+        )
         ax.text(
-            (start + end) / 2,  # テキストのX位置 (バーの中央)
+            (start + end) / 2,
             text_y,
-            f"{start} -> {end}", # 表示するテキスト
-            va='center',         # 垂直方向の中央揃え
-            ha='center',         # 水平方向の中央揃え
-            color='white',       # テキストの色
-            fontweight='bold',
+            display_text,  # 実行モード（レシピ）を表示
+            va="center",
+            ha="center",
+            color="white",
+            fontweight="bold",
         )
 
     # --- 3. グラフの装飾 ---
-    # メイクスパン（総所要時間）を取得
     makespan = int(solver.objective_value)
     ax.set_xlabel("Time")
     ax.set_ylabel("Task")
@@ -290,9 +287,129 @@ def visualize_schedule(
     ax.set_xticks(range(makespan + 2))
     ax.set_xlim(0, makespan + 1)
     ax.invert_yaxis()
-    ax.grid(True, which='major', axis='x', linestyle='--', linewidth=0.5)
+    ax.grid(True, which="major", axis="x", linestyle="--", linewidth=0.5)
     plt.tight_layout()
-    plt.show()                
+    plt.show()
+
+
+def visualize_resource_usage(
+    solver: cp_model.CpSolver,
+    problem: rcpsp_pb2.RcpspProblem,
+    all_active_tasks: list[int],
+    task_starts: dict,
+    task_ends: dict,
+    selected_recipes: dict,
+    task_resource_to_fixed_demands: dict,
+    title: str = "Resource Usage Over Time",
+) -> None:
+    """
+    時間経過に伴うリソースの使用量を可視化する関数
+    """
+    makespan = int(solver.objective_value)
+    time_points = np.arange(makespan + 2)  # 終了時点も含むため+2
+    num_resources = len(problem.resources)
+
+    if num_resources == 0:
+        return
+
+    # リソースごとにサブプロットを作成
+    fig, axes = plt.subplots(
+        nrows=num_resources,
+        ncols=1,
+        figsize=(12, 3 * num_resources),
+        sharex=True,
+        squeeze=False,
+    )
+    axes = axes.flatten()  # 常に2D配列として扱う
+    fig.suptitle(title, fontsize=16)
+
+    for res_id, ax in enumerate(axes):
+        resource = problem.resources[res_id]
+        capacity = resource.max_capacity
+
+        # 無限キャパシティのリソースはスキップ
+        if capacity == -1:
+            ax.set_title(f"Resource {res_id} (Infinite Capacity)")
+            ax.set_yticks([])
+            continue
+
+        if resource.renewable:
+            # --- Renewable Resource の場合 ---
+            usage_over_time = np.zeros_like(time_points, dtype=int)
+            for t in time_points[:-1]:  # 各時刻 t での使用量を計算
+                current_usage = 0
+                for task_id in all_active_tasks:
+                    start_time = solver.value(task_starts[task_id])
+                    end_time = solver.value(task_ends[task_id])
+                    if start_time <= t < end_time:
+                        recipe = selected_recipes[task_id]
+                        demand = task_resource_to_fixed_demands[(task_id, res_id)][
+                            recipe
+                        ]
+                        current_usage += demand
+                usage_over_time[t] = current_usage
+
+            # ステッププロットで描画
+            ax.step(time_points, usage_over_time, where="post", label="Used Capacity")
+            ax.axhline(
+                y=capacity, color="r", linestyle="--", label=f"Max Capacity ({capacity})"
+            )
+            ax.set_ylim(0, max(1, capacity * 1.1))
+            ax.set_ylabel("Usage")
+            ax.set_title(f"Renewable Resource {res_id}")
+
+        else:  # Reservoir Resource (Non-Renewable) の場合
+            # --- Reservoir Resource の場合 ---
+            level_over_time = np.zeros_like(time_points, dtype=int)
+            initial_level = capacity  # 初期レベルは最大容量と仮定
+
+            # イベント（タスク開始）を時間順にソート
+            events = []
+            for task_id in all_active_tasks:
+                start_time = solver.value(task_starts[task_id])
+                recipe = selected_recipes[task_id]
+                demand = task_resource_to_fixed_demands[(task_id, res_id)][recipe]
+                if demand != 0:
+                    events.append((start_time, demand))
+            events.sort()
+
+            current_level = initial_level
+            event_idx = 0
+            for t in time_points[:-1]:
+                while event_idx < len(events) and events[event_idx][0] == t:
+                    current_level -= events[event_idx][1]
+                    event_idx += 1
+                level_over_time[t] = current_level
+            level_over_time[-1] = level_over_time[-2] # 最後の点を描画
+
+            # ステッププロットで描画
+            ax.step(time_points, level_over_time, where="post", label="Remaining Level")
+            min_capacity = resource.min_capacity if resource.min_capacity != 0 else 0
+            ax.axhline(
+                y=capacity, color="g", linestyle="--", label=f"Max Level ({capacity})"
+            )
+            ax.axhline(
+                y=min_capacity,
+                color="r",
+                linestyle="--",
+                label=f"Min Level ({min_capacity})",
+            )
+            ax.set_ylim(min(0, min_capacity) - 1, max(1, capacity * 1.1))
+            ax.set_ylabel("Level")
+            ax.set_title(f"Reservoir Resource {res_id}")
+
+        ax.grid(True, which="major", linestyle="--", linewidth=0.5)
+        ax.legend()
+
+    # X軸の設定
+    plt.xlabel("Time")
+    plt.xlim(0, makespan)
+    plt.xticks(range(makespan + 1))
+    plt.tight_layout(rect=[0, 0, 1, 0.96])  # suptitleとの重なりを避ける
+    plt.show()
+
+
+# ▲▲▲【NEW】ここまで関数を追加 ▲▲▲
 
 
 def solve_rcpsp(
@@ -303,23 +420,7 @@ def solve_rcpsp(
     source: int,
     sink: int,
 ) -> None:
-    """Parse and solve a given RCPSP problem in proto format.
-
-    The model will only look at the tasks {source} + {sink} + active_tasks, and
-    ignore all others.
-
-    Args:
-      problem: the description of the model to solve in protobuf format
-      proto_file: the name of the file to export the CpModel proto to.
-      params: the string representation of the parameters to pass to the sat
-        solver.
-      active_tasks: the set of active tasks to consider.
-      source: the source task in the graph. Its end will be forced to 0.
-      sink: the sink task of the graph. Its start is the makespan of the problem.
-
-    Returns:
-      (lower_bound of the objective, best solution found, assignment)
-    """
+    """Parse and solve a given RCPSP problem in proto format."""
     # Create the model.
     model = cp_model.CpModel()
     model.name = problem.name
@@ -529,14 +630,6 @@ def solve_rcpsp(
                     resource.max_capacity,
                 )
             else:  # No producer-consumer. We just sum the demands.
-                # model.add(
-                #     cp_model.LinearExpr.sum(
-                #         [task_to_resource_demands[t][res] for t in all_active_tasks]
-                #     )
-                #     <= c
-                # )
-                #
-
                 # 自分の場合、Renewableでないなら、ここが呼ばれる
                 # 変更：NonRenewable Resourcesの代わりに、Reservoir Resourcesを利用。
                 # 制約の引数として渡すための3つのリストを準備
@@ -624,11 +717,7 @@ def solve_rcpsp(
 
     # Print Schedule
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-        print("Solution Found:")
-        print(f"Optimal Makespan: {solver.objective_value}")
-        print("--------------------------------------------------")
-
-        # 1. タスクごとのスケジュールを表示
+        # 1. タスクごとのスケジュールをコンソールに表示
         print_schedule_by_task(
             solver=solver,
             all_active_tasks=all_active_tasks,
@@ -638,7 +727,7 @@ def solve_rcpsp(
             task_durations=task_durations,
             task_ends=task_ends,
         )
-        # 2. 時刻ごとのスケジュールを表示
+        # 2. 時刻ごとのスケジュールをコンソールに表示
         print_schedule_by_time_step(
             solver=solver,
             problem=problem,
@@ -648,11 +737,38 @@ def solve_rcpsp(
             task_to_resource_demands=task_to_resource_demands,
             all_resources=all_resources,
         )
+
+        selected_recipes = {}
+        for t in all_active_tasks:
+            if len(task_to_presence_literals[t]) > 1:
+                for r, literal in enumerate(task_to_presence_literals[t]):
+                    if solver.value(literal):
+                        selected_recipes[t] = r
+                        break
+            else:
+                selected_recipes[t] = 0
+
+        # 3. ガントチャートを可視化
         visualize_schedule(
             solver=solver,
             all_active_tasks=all_active_tasks,
             task_starts=task_starts,
-            task_durations=task_durations)
+            task_durations=task_durations,
+            selected_recipes=selected_recipes,
+            title=f"Task Schedule Gantt Chart for '{problem.name}'",
+        )
+
+        # 4. リソース使用量を可視化
+        visualize_resource_usage(
+            solver=solver,
+            problem=problem,
+            all_active_tasks=all_active_tasks,
+            task_starts=task_starts,
+            task_ends=task_ends,
+            selected_recipes=selected_recipes,
+            task_resource_to_fixed_demands=task_resource_to_fixed_demands,
+            title=f"Resource Usage for '{problem.name}'",
+        )
 
     elif status == cp_model.INFEASIBLE:
         print("No solution found.")
