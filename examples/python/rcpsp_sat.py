@@ -193,8 +193,8 @@ def print_schedule_by_time_step(
                 remaining_capacity = total_capacity - used_capacity
                 print(
                     f"    - (Renewable)   Resource {res_id}:"
-                    f" Used={used_capacity}/{total_capacity}"
-                    f" (Remaining={remaining_capacity})"
+                    f" Remaining={remaining_capacity}/{total_capacity}".ljust(46),
+                    f" (Used={used_capacity})"
                 )
             # 今回は、Renewable ResourceとReservoir Resourceしか扱わない。
             # consumer_producerでもなく、resource_investmentでもない。
@@ -214,8 +214,8 @@ def print_schedule_by_time_step(
                 if remaining < 0 or consumed_so_far < 0 or remaining > total_capacity or consumed_so_far > total_capacity:
                     raise ValueError("Reservoir resource must be in [min, max] at any time.")
                 print(
-                    f"    - (NonRenewable) Resource {res_id}:"
-                    f" Remaining={remaining}/{total_capacity}"
+                    f"    - (Reservoir)   Resource {res_id}:"
+                    f" Remaining={remaining}/{total_capacity}".ljust(46),
                     f" (Consumed={consumed_so_far})"
                 )
 
