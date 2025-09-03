@@ -95,7 +95,7 @@ def print_problem_statistics(problem: rcpsp_pb2.RcpspProblem):
 
 def print_schedule_by_task(
     solver: cp_model.CpSolver,
-    all_active_tasks: list[int],
+    executed_tasks: list[int],
     source: int,
     sink: int,
     task_starts: dict,
@@ -121,7 +121,7 @@ def print_schedule_by_task(
     )
 
     # 通常のタスクを表示（IDでソートして見やすくする）
-    for t in sorted(all_active_tasks):
+    for t in sorted(executed_tasks):
         start_val = solver.value(task_starts[t])
         duration_val = solver.value(task_durations[t])
         end_val = solver.value(task_ends[t])
@@ -150,7 +150,7 @@ def print_schedule_by_task(
 def print_schedule_by_time_step(
     solver: cp_model.CpSolver,
     problem: rcpsp_pb2.RcpspProblem,
-    all_active_tasks: list[int],
+    executed_tasks: list[int],
     task_starts: dict,
     task_ends: dict,
     task_to_resource_demands: dict,
@@ -170,7 +170,7 @@ def print_schedule_by_time_step(
         running_tasks_with_mode = []  # 表示用の文字列リスト
 
         # 各タスクが現在の時刻 t で実行中か確認
-        for task_id in all_active_tasks:
+        for task_id in executed_tasks:
             start_time = solver.value(task_starts[task_id])
             end_time = solver.value(task_ends[task_id])
             if start_time <= t < end_time:
@@ -218,7 +218,7 @@ def print_schedule_by_time_step(
             # consumer_producerでもなく、resource_investmentでもない。
             else:
                 consumed_so_far = 0
-                for task_id in all_active_tasks:
+                for task_id in executed_tasks:
                     start_time = solver.value(task_starts[task_id])
                     if start_time <= t:
                         if (
@@ -247,7 +247,7 @@ def print_schedule_by_time_step(
 
 def visualize_schedule(
     solver: cp_model.CpSolver,
-    all_active_tasks: list[int],
+    executed_tasks: list[int],
     task_starts: dict,
     task_durations: dict,
     selected_recipes: dict,  # 選択されたレシピの情報を受け取る引数を追加
@@ -257,7 +257,7 @@ def visualize_schedule(
     OR-Toolsのスケジューリング結果をガントチャートで可視化する関数
     """
     # --- 1. データの準備 ---
-    tasks = sorted(all_active_tasks)
+    tasks = sorted(executed_tasks)
     starts = [solver.value(task_starts[t]) for t in tasks]
     durations = [solver.value(task_durations[t]) for t in tasks]
     ends = [s + d for s, d in zip(starts, durations)]
@@ -309,7 +309,7 @@ def visualize_schedule(
 def visualize_resource_usage(
     solver: cp_model.CpSolver,
     problem: rcpsp_pb2.RcpspProblem,
-    all_active_tasks: list[int],
+    executed_tasks: list[int],
     task_starts: dict,
     task_ends: dict,
     selected_recipes: dict,
@@ -352,7 +352,7 @@ def visualize_resource_usage(
             remaining_over_time = np.zeros_like(time_points, dtype=int)
             for t in time_points[:-1]:  # 各時刻 t での残量を計算
                 current_usage = 0
-                for task_id in all_active_tasks:
+                for task_id in executed_tasks:
                     start_time = solver.value(task_starts[task_id])
                     end_time = solver.value(task_ends[task_id])
                     if start_time <= t < end_time:
@@ -386,7 +386,7 @@ def visualize_resource_usage(
             initial_level = capacity  # 初期レベルは最大容量と仮定
 
             events = []
-            for task_id in all_active_tasks:
+            for task_id in executed_tasks:
                 start_time = solver.value(task_starts[task_id])
                 recipe = selected_recipes[task_id]
                 demand = task_resource_to_fixed_demands[(task_id, res_id)][recipe]
@@ -445,22 +445,36 @@ def _process_and_display_solution(
     task_resource_to_fixed_demands: dict,
 ) -> None:
     """ソルバーの実行結果を処理し、コンソールとグラフで表示する"""
+    # 実際に実行されたタスクのリストを作成する
+    executed_tasks = []
+    for t in all_active_tasks:
+        # タスクtの presence literals を取得
+        literals = task_to_presence_literals[t]
+        
+        # literalsが[1]（必須タスク）であるか、
+        # またはブール変数のリストの合計が1（オプショナルタスクが選択された）の場合
+        if literals == [1] or sum(solver.value(lit) for lit in literals) == 1:
+            executed_tasks.append(t)
+
     # 最初に選択されたレシピを特定する
     selected_recipes = {}
-    for t in all_active_tasks:
+    # all_active_tasks ではなく executed_tasks をループする
+    for t in executed_tasks:
         if len(task_to_presence_literals[t]) > 1:
             for r, literal in enumerate(task_to_presence_literals[t]):
                 if solver.value(literal):
                     selected_recipes[t] = r
                     break
         else:
+            # 実行されたタスクでレシピが1つなら、レシピは0番目
             selected_recipes[t] = 0
 
     # 1. タスクごとのスケジュールをコンソールに表示
+    # all_active_tasks の代わりに executed_tasks を渡す
     print_schedule_by_task(
         solver=solver,
-        all_active_tasks=all_active_tasks,
-        source=source,
+        executed_tasks=executed_tasks, # 変更
+        source=source,    
         sink=sink,
         task_starts=task_starts,
         task_durations=task_durations,
@@ -472,7 +486,7 @@ def _process_and_display_solution(
     print_schedule_by_time_step(
         solver=solver,
         problem=problem,
-        all_active_tasks=all_active_tasks,
+        executed_tasks=executed_tasks,
         task_starts=task_starts,
         task_ends=task_ends,
         task_to_resource_demands=task_to_resource_demands,
@@ -483,7 +497,7 @@ def _process_and_display_solution(
     # 3. ガントチャートを可視化
     visualize_schedule(
         solver=solver,
-        all_active_tasks=all_active_tasks,
+        executed_tasks=executed_tasks,
         task_starts=task_starts,
         task_durations=task_durations,
         selected_recipes=selected_recipes,
@@ -494,7 +508,7 @@ def _process_and_display_solution(
     visualize_resource_usage(
         solver=solver,
         problem=problem,
-        all_active_tasks=all_active_tasks,
+        executed_tasks=executed_tasks,
         task_starts=task_starts,
         task_ends=task_ends,
         selected_recipes=selected_recipes,
@@ -550,6 +564,7 @@ def solve_rcpsp(
 
     resource_to_sum_of_demand_max = collections.defaultdict(int)
 
+    optional_tasks = {5, 8}
     # Create task variables.
     for t in all_active_tasks:
         task = problem.tasks[t]
@@ -559,15 +574,31 @@ def solve_rcpsp(
         start_var = model.new_int_var(0, horizon, f"start_of_task_{t}")
         end_var = model.new_int_var(0, horizon, f"end_of_task_{t}")
 
+        # if num_recipes > 1:
+        #     # Create one literal per recipe.
+        #     literals = [model.new_bool_var(f"is_present_{t}_{r}") for r in all_recipes]
+
+        #     # Exactly one recipe must be performed.
+        #     model.add_exactly_one(literals)
+
+        # else:
+        #     literals = [1]
+
         if num_recipes > 1:
-            # Create one literal per recipe.
             literals = [model.new_bool_var(f"is_present_{t}_{r}") for r in all_recipes]
-
-            # Exactly one recipe must be performed.
-            model.add_exactly_one(literals)
-
-        else:
-            literals = [1]
+            if t in optional_tasks:
+                # 0回または1回の実行を許可する
+                model.add_at_most_one(literals)
+            else:
+                # 必ず1回実行する
+                model.add_exactly_one(literals)
+        else:  # num_recipesが1の場合
+            if t in optional_tasks:
+                # 実行するかしないかの選択肢を持たせるため、ブール変数を作成する
+                literals = [model.new_bool_var(f"is_present_{t}_0")]
+            else:
+                # 必ず実行する
+                literals = [1]
 
         # Temporary data structure to fill in 0 demands.
         demand_matrix = collections.defaultdict(int)
