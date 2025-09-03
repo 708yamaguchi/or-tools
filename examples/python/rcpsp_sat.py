@@ -215,7 +215,6 @@ def print_schedule_by_time_step(
                                 task_to_resource_demands[task_id][res_id]
                             )
                             cumulative_demand += demand
-                
                 min_level = resource.min_capacity
                 max_level = resource.max_capacity
                 print(
@@ -456,6 +455,7 @@ def solve_rcpsp(
                 capacities.append(capacity)
                 max_cost += c * resource.unit_cost
             else:  # Standard renewable resource.
+                # 自分の場合、Renewableなら、ここが呼ばれる
                 if _USE_INTERVAL_MAKESPAN.value:
                     intervals.append(interval_makespan)
                     demands.append(c)
@@ -478,11 +478,49 @@ def solve_rcpsp(
                     resource.max_capacity,
                 )
             else:  # No producer-consumer. We just sum the demands.
-                model.add(
-                    cp_model.LinearExpr.sum(
-                        [task_to_resource_demands[t][res] for t in all_active_tasks]
-                    )
-                    <= c
+                # model.add(
+                #     cp_model.LinearExpr.sum(
+                #         [task_to_resource_demands[t][res] for t in all_active_tasks]
+                #     )
+                #     <= c
+                # )
+                #
+
+                # 自分の場合、Renewableでないなら、ここが呼ばれる
+                # 変更：NonRenewable Resourcesの代わりに、Reservoir Resourcesを利用。
+                # 制約の引数として渡すための3つのリストを準備
+                reservoir_times = []
+                reservoir_demands = []
+                reservoir_actives = []
+
+                # 全てのアクティブなタスクをループ
+                for t in all_active_tasks:
+                    # タスクtが持つレシピの数を取得
+                    num_recipes = len(problem.tasks[t].recipes)
+                    # タスクtの各レシピrを、それぞれ独立したオプショナルなイベントとして扱う
+                    for r in range(num_recipes):
+                        # レシピrの需要量（これは固定の整数値）を取得
+                        demand = task_resource_to_fixed_demands[(t, res)][r]
+                        # 需要が0のイベントは残量に影響しないため、モデルに追加不要
+                        if demand == 0:
+                            continue
+                        # 1. Times: イベントの発生時刻（タスクtの開始時刻）
+                        reservoir_times.append(task_starts[t])
+                        # 2. Demands: 資源レベルの変化量（固定値）
+                        #    消費（正の値）をそのまま渡す
+                        reservoir_demands.append(demand)
+                        # 3. Actives: イベントが有効かを示すブール変数
+                        #    （タスクtでレシピrが選択された場合にTrueになる変数）
+                        is_recipe_r_active = task_to_presence_literals[t][r]
+                        reservoir_actives.append(is_recipe_r_active)
+                # 全てのタスクの全レシピをイベントとして登録し、Reservoir制約を追加
+                resource.min_capacity = 0
+                model.AddReservoirConstraintWithActive(
+                    reservoir_times,
+                    reservoir_demands,
+                    reservoir_actives,
+                    resource.min_capacity,  # 資源残量の下限 (0。このプログラム内で補完)
+                    resource.max_capacity,  # 資源残量の上限 (初期容量。タスクファイルに定義されている)
                 )
 
     # Objective.
