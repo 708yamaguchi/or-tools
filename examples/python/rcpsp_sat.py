@@ -859,25 +859,23 @@ def solve_rcpsp(
 
     status = solver.solve(model)
 
-    # Print Schedule
-    if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-        _process_and_display_solution(
-            solver=solver,
-            problem=problem,
-            all_active_tasks=all_active_tasks,
-            all_resources=all_resources,
-            source=source,
-            sink=sink,
-            task_starts=task_starts,
-            task_ends=task_ends,
-            task_durations=task_durations,
-            task_to_presence_literals=task_to_presence_literals,
-            task_to_resource_demands=task_to_resource_demands,
-            task_resource_to_fixed_demands=task_resource_to_fixed_demands,
-        )
-    elif status == cp_model.INFEASIBLE:
-        print("No solution found.")
-    
+    results = {
+        "solver": solver,
+        "problem": problem,
+        "all_active_tasks": all_active_tasks,
+        "all_resources": all_resources,
+        "source": source,
+        "sink": sink,
+        "task_starts": task_starts,
+        "task_ends": task_ends,
+        "task_durations": task_durations,
+        "task_to_presence_literals": task_to_presence_literals,
+        "task_to_resource_demands": task_to_resource_demands,
+        "task_resource_to_fixed_demands": task_resource_to_fixed_demands,
+    }
+
+    return status, results
+
 
 def main(_):
     rcpsp_parser = rcpsp.RcpspParser()
@@ -888,7 +886,7 @@ def main(_):
 
     last_task = len(problem.tasks) - 1
 
-    solve_rcpsp(
+    status, results = solve_rcpsp(
         problem=problem,
         proto_file=_OUTPUT_PROTO.value,
         params=_PARAMS.value,
@@ -898,6 +896,12 @@ def main(_):
         source=0,
         sink=last_task,
     )
+
+    if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+        _process_and_display_solution(**results)
+    elif status == cp_model.INFEASIBLE:
+        print("No solution found.")
+
 
 
 if __name__ == "__main__":
