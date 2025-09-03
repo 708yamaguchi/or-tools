@@ -95,6 +95,7 @@ def print_problem_statistics(problem: rcpsp_pb2.RcpspProblem):
 
 def print_schedule_by_task(
     solver: cp_model.CpSolver,
+    all_active_tasks: list[int],
     executed_tasks: list[int],
     source: int,
     sink: int,
@@ -109,7 +110,7 @@ def print_schedule_by_task(
     print("Solution Found:")
     print(f"Optimal Makespan: {solver.objective_value}")
     print("--------------------------------------------------")
-    print("--- Schedule by Task ---")
+    print("--- Schedule by Task (Skipped tasks included) ---")
 
     # 開始ダミータスクを表示
     source_start_val = solver.value(task_starts[source])
@@ -120,22 +121,28 @@ def print_schedule_by_task(
         f"End={source_start_val:<3}  (Project Start)"
     )
 
-    # 通常のタスクを表示（IDでソートして見やすくする）
-    for t in sorted(executed_tasks):
-        start_val = solver.value(task_starts[t])
-        duration_val = solver.value(task_durations[t])
-        end_val = solver.value(task_ends[t])
-        recipe_index = selected_recipes.get(t, "N/A")
-        display_mode = (
-            recipe_index + 1 if isinstance(recipe_index, int) else recipe_index
-        )
-        print(
-            f"Task {t:2} "
-            f"(Mode {display_mode}): "
-            f"Start={start_val:<3} "
-            f"Duration={duration_val:<3} "
-            f"End={end_val:<3} "
-        )
+    # 全てのアクティブタスクをID順にループ
+    for t in sorted(all_active_tasks):
+        if t in executed_tasks:
+            # 実行されたタスクの情報を表示
+            start_val = solver.value(task_starts[t])
+            duration_val = solver.value(task_durations[t])
+            end_val = solver.value(task_ends[t])
+            recipe_index = selected_recipes.get(t, "N/A")
+            display_mode = (
+                recipe_index + 1 if isinstance(recipe_index, int) else recipe_index
+            )
+            print(
+                f"Task {t:2} "
+                f"(Mode {display_mode}): "
+                f"Start={start_val:<3} "
+                f"Duration={duration_val:<3} "
+                f"End={end_val:<3} "
+            )
+        else:
+            # スキップされたタスクの情報を表示
+            print(f"Task {t:2}: --- SKIPPED ---")
+
 
     # 終了ダミータスクを表示
     sink_start_val = solver.value(task_starts[sink])
@@ -247,26 +254,53 @@ def print_schedule_by_time_step(
 
 def visualize_schedule(
     solver: cp_model.CpSolver,
-    executed_tasks: list[int],
+    all_active_tasks: list[int], # 全タスクリストを受け取る
+    executed_tasks: list[int],   # 実行済みタスクリストを受け取る
     task_starts: dict,
     task_durations: dict,
-    selected_recipes: dict,  # 選択されたレシピの情報を受け取る引数を追加
+    selected_recipes: dict,
     title: str = "Task Schedule Gantt Chart",
 ) -> None:
     """
     OR-Toolsのスケジューリング結果をガントチャートで可視化する関数
     """
     # --- 1. データの準備 ---
-    tasks = sorted(executed_tasks)
-    starts = [solver.value(task_starts[t]) for t in tasks]
-    durations = [solver.value(task_durations[t]) for t in tasks]
+    tasks_to_display = sorted(all_active_tasks)
+
+    # 描画用のデータを格納するリスト
+    y_labels = []
+    starts = []
+    durations = []
+    bar_texts = []
+
+    for t in tasks_to_display:
+        if t in executed_tasks:
+            # 実行されたタスク
+            y_labels.append(f"Task {t}")
+            starts.append(solver.value(task_starts[t]))
+            durations.append(solver.value(task_durations[t]))
+
+            recipe_index = selected_recipes.get(t, "N/A")
+            display_text = (
+                f"Mode {recipe_index + 1}"
+                if isinstance(recipe_index, int)
+                else f"Mode {recipe_index}"
+            )
+            bar_texts.append(display_text)
+        else:
+            # スキップされたタスク
+            y_labels.append(f"Task {t} (Skipped)")
+            starts.append(0)  # 開始時刻0
+            durations.append(0) # 期間0 (バーは見えなくなる)
+            bar_texts.append("") # テキストなし
+
     ends = [s + d for s, d in zip(starts, durations)]
 
     # --- 2. グラフの描画 ---
-    fig, ax = plt.subplots(figsize=(12, len(tasks) * 0.5 + 2))
-    colors = cm.viridis(np.linspace(0, 1, len(tasks)))
+    fig, ax = plt.subplots(figsize=(12, len(tasks_to_display) * 0.5 + 2))
+    colors = cm.viridis(np.linspace(0, 1, len(tasks_to_display)))
     bars = ax.barh(
-        y=[f"Task {t}" for t in tasks],
+        y=y_labels,
         width=durations,
         left=starts,
         edgecolor="black",
@@ -275,23 +309,18 @@ def visualize_schedule(
     )
 
     # 各バーにタスク情報（実行モード）をテキストで追加
-    for bar, start, end, task_id in zip(bars, starts, ends, tasks):
-        text_y = bar.get_y() + bar.get_height() / 2
-        recipe_index = selected_recipes.get(task_id, "N/A")
-        display_text = (
-            f"Mode {recipe_index + 1}"
-            if isinstance(recipe_index, int)
-            else f"Mode {recipe_index}"
-        )
-        ax.text(
-            (start + end) / 2,
-            text_y,
-            display_text,  # 実行モード（レシピ）を表示
-            va="center",
-            ha="center",
-            color="white",
-            fontweight="bold",
-        )
+    for bar, start, end, text in zip(bars, starts, ends, bar_texts):
+        if text: # テキストがある場合のみ描画
+            text_y = bar.get_y() + bar.get_height() / 2
+            ax.text(
+                (start + end) / 2,
+                text_y,
+                text,
+                va="center",
+                ha="center",
+                color="white",
+                fontweight="bold",
+            )
 
     # --- 3. グラフの装飾 ---
     makespan = int(solver.objective_value)
@@ -473,8 +502,9 @@ def _process_and_display_solution(
     # all_active_tasks の代わりに executed_tasks を渡す
     print_schedule_by_task(
         solver=solver,
+        all_active_tasks=all_active_tasks,
         executed_tasks=executed_tasks, # 変更
-        source=source,    
+        source=source,
         sink=sink,
         task_starts=task_starts,
         task_durations=task_durations,
@@ -497,6 +527,7 @@ def _process_and_display_solution(
     # 3. ガントチャートを可視化
     visualize_schedule(
         solver=solver,
+        all_active_tasks=all_active_tasks,
         executed_tasks=executed_tasks,
         task_starts=task_starts,
         task_durations=task_durations,
@@ -522,6 +553,7 @@ def solve_rcpsp(
     proto_file: str,
     params: str,
     active_tasks: set[int],
+    optional_tasks: set[int],
     source: int,
     sink: int,
 ) -> None:
@@ -564,7 +596,6 @@ def solve_rcpsp(
 
     resource_to_sum_of_demand_max = collections.defaultdict(int)
 
-    optional_tasks = {5, 8}
     # Create task variables.
     for t in all_active_tasks:
         task = problem.tasks[t]
@@ -871,6 +902,8 @@ def main(_):
         proto_file=_OUTPUT_PROTO.value,
         params=_PARAMS.value,
         active_tasks=set(range(1, last_task)),
+        optional_tasks={},
+        # optional_tasks={1,2,3,4,5,6,7,8,9,10},
         source=0,
         sink=last_task,
     )
