@@ -181,7 +181,7 @@ def print_schedule_by_time_step(
                 )
                 running_tasks_with_mode.append(f"{task_id}(Mode {display_mode})")
 
-        print(f"\n[Time: {t}]")
+        print(f"[Time: {t}]")
         if not running_tasks_with_mode:
             print("  Running Tasks: None")
         else:
@@ -428,6 +428,79 @@ def visualize_resource_usage(
     plt.xticks(range(makespan + 1))
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     plt.show()
+
+
+def _process_and_display_solution(
+    solver: cp_model.CpSolver,
+    problem: rcpsp_pb2.RcpspProblem,
+    all_active_tasks: list[int],
+    all_resources: range,
+    source: int,
+    sink: int,
+    task_starts: dict,
+    task_ends: dict,
+    task_durations: dict,
+    task_to_presence_literals: dict,
+    task_to_resource_demands: dict,
+    task_resource_to_fixed_demands: dict,
+) -> None:
+    """ソルバーの実行結果を処理し、コンソールとグラフで表示する"""
+    # 最初に選択されたレシピを特定する
+    selected_recipes = {}
+    for t in all_active_tasks:
+        if len(task_to_presence_literals[t]) > 1:
+            for r, literal in enumerate(task_to_presence_literals[t]):
+                if solver.value(literal):
+                    selected_recipes[t] = r
+                    break
+        else:
+            selected_recipes[t] = 0
+
+    # 1. タスクごとのスケジュールをコンソールに表示
+    print_schedule_by_task(
+        solver=solver,
+        all_active_tasks=all_active_tasks,
+        source=source,
+        sink=sink,
+        task_starts=task_starts,
+        task_durations=task_durations,
+        task_ends=task_ends,
+        selected_recipes=selected_recipes,
+    )
+
+    # 2. 時刻ごとのスケジュールをコンソールに表示
+    print_schedule_by_time_step(
+        solver=solver,
+        problem=problem,
+        all_active_tasks=all_active_tasks,
+        task_starts=task_starts,
+        task_ends=task_ends,
+        task_to_resource_demands=task_to_resource_demands,
+        all_resources=all_resources,
+        selected_recipes=selected_recipes,
+    )
+
+    # 3. ガントチャートを可視化
+    visualize_schedule(
+        solver=solver,
+        all_active_tasks=all_active_tasks,
+        task_starts=task_starts,
+        task_durations=task_durations,
+        selected_recipes=selected_recipes,
+        title=f"Task Schedule Gantt Chart for '{problem.name}'",
+    )
+
+    # 4. リソース使用量を可視化
+    visualize_resource_usage(
+        solver=solver,
+        problem=problem,
+        all_active_tasks=all_active_tasks,
+        task_starts=task_starts,
+        task_ends=task_ends,
+        selected_recipes=selected_recipes,
+        task_resource_to_fixed_demands=task_resource_to_fixed_demands,
+        title=f"Resource Usage for '{problem.name}'",
+    )
 
 
 def solve_rcpsp(
@@ -735,61 +808,20 @@ def solve_rcpsp(
 
     # Print Schedule
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-        selected_recipes = {}
-        for t in all_active_tasks:
-            if len(task_to_presence_literals[t]) > 1:
-                for r, literal in enumerate(task_to_presence_literals[t]):
-                    if solver.value(literal):
-                        selected_recipes[t] = r
-                        break
-            else:
-                selected_recipes[t] = 0
-        
-        # 1. タスクごとのスケジュールをコンソールに表示
-        print_schedule_by_task(
+        _process_and_display_solution(
             solver=solver,
+            problem=problem,
             all_active_tasks=all_active_tasks,
+            all_resources=all_resources,
             source=source,
             sink=sink,
             task_starts=task_starts,
+            task_ends=task_ends,
             task_durations=task_durations,
-            task_ends=task_ends,
-            selected_recipes=selected_recipes,
-        )
-        # 2. 時刻ごとのスケジュールをコンソールに表示
-        print_schedule_by_time_step(
-            solver=solver,
-            problem=problem,
-            all_active_tasks=all_active_tasks,
-            task_starts=task_starts,
-            task_ends=task_ends,
+            task_to_presence_literals=task_to_presence_literals,
             task_to_resource_demands=task_to_resource_demands,
-            all_resources=all_resources,
-            selected_recipes=selected_recipes,
-        )
-
-        # 3. ガントチャートを可視化
-        visualize_schedule(
-            solver=solver,
-            all_active_tasks=all_active_tasks,
-            task_starts=task_starts,
-            task_durations=task_durations,
-            selected_recipes=selected_recipes,
-            title=f"Task Schedule Gantt Chart for '{problem.name}'",
-        )
-
-        # 4. リソース使用量を可視化
-        visualize_resource_usage(
-            solver=solver,
-            problem=problem,
-            all_active_tasks=all_active_tasks,
-            task_starts=task_starts,
-            task_ends=task_ends,
-            selected_recipes=selected_recipes,
             task_resource_to_fixed_demands=task_resource_to_fixed_demands,
-            title=f"Resource Usage for '{problem.name}'",
         )
-
     elif status == cp_model.INFEASIBLE:
         print("No solution found.")
 
