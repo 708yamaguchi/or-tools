@@ -180,8 +180,6 @@ def print_schedule_by_time_step(
                 continue
 
             # --- リソースの種類に応じて計算を分岐 ---
-
-            # 1. Renewable Resource
             if resource.renewable:
                 used_capacity = 0
                 for task_id in running_tasks:
@@ -198,32 +196,8 @@ def print_schedule_by_time_step(
                     f" Used={used_capacity}/{total_capacity}"
                     f" (Remaining={remaining_capacity})"
                 )
-
-            # 2. Reservoir Resource
-            elif problem.is_consumer_producer:
-                # 仕様に基づき、レベル(累積需要)は0から開始する。
-                # 生産が正、消費が負の需要として、時刻tまでに開始したタスクの需要を合計する。
-                cumulative_demand = 0
-                for task_id in all_active_tasks:
-                    start_time = solver.value(task_starts[task_id])
-                    if start_time <= t:
-                        if (
-                            task_id in task_to_resource_demands
-                            and len(task_to_resource_demands[task_id]) > res_id
-                        ):
-                            demand = solver.value(
-                                task_to_resource_demands[task_id][res_id]
-                            )
-                            cumulative_demand += demand
-                min_level = resource.min_capacity
-                max_level = resource.max_capacity
-                print(
-                    f"    - (Reservoir)   Resource {res_id}:"
-                    f" Level={cumulative_demand:4}"
-                    f" (Bounds: [{min_level}, {max_level}])"
-                )
-
-            # 3. Simple Non-renewable Resource
+            # 今回は、Renewable ResourceとReservoir Resourceしか扱わない。
+            # consumer_producerでもなく、resource_investmentでもない。
             else:
                 consumed_so_far = 0
                 for task_id in all_active_tasks:
@@ -237,6 +211,8 @@ def print_schedule_by_time_step(
                                 task_to_resource_demands[task_id][res_id]
                             )
                 remaining = total_capacity - consumed_so_far
+                if remaining < 0 or consumed_so_far < 0 or remaining > total_capacity or consumed_so_far > total_capacity:
+                    raise ValueError("Reservoir resource must be in [min, max] at any time.")
                 print(
                     f"    - (NonRenewable) Resource {res_id}:"
                     f" Remaining={remaining}/{total_capacity}"
