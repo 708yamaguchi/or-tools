@@ -149,6 +149,7 @@ def print_schedule_by_time_step(
     task_ends: dict,
     task_to_resource_demands: dict,
     all_resources: range,
+    selected_recipes: dict,
 ):
     """
     時刻ごとに実行中のタスクとリソースの状態を表示する関数（再修正版）
@@ -159,19 +160,26 @@ def print_schedule_by_time_step(
 
     # 時刻を0からMakespanまで1ずつ進める
     for t in range(makespan + 1):
-        running_tasks = []
+        running_tasks = []  # リソース計算用のタスクIDリスト
+        running_tasks_with_mode = []  # 表示用の文字列リスト
+
         # 各タスクが現在の時刻 t で実行中か確認
         for task_id in all_active_tasks:
             start_time = solver.value(task_starts[task_id])
             end_time = solver.value(task_ends[task_id])
             if start_time <= t < end_time:
                 running_tasks.append(task_id)
+                recipe_index = selected_recipes.get(task_id, "N/A")
+                display_mode = (
+                    recipe_index + 1 if isinstance(recipe_index, int) else recipe_index
+                )
+                running_tasks_with_mode.append(f"{task_id}(Mode {display_mode})")
 
         print(f"\n[Time: {t}]")
-        if not running_tasks:
+        if not running_tasks_with_mode:
             print("  Running Tasks: None")
         else:
-            print(f"  Running Tasks: {sorted(running_tasks)}")
+            print(f"  Running Tasks: {running_tasks_with_mode}")
 
         # 各リソースの状態を計算して表示
         print("  Resource Status:")
@@ -334,9 +342,9 @@ def visualize_resource_usage(
             continue
 
         if resource.renewable:
-            # --- Renewable Resource の場合 ---
-            usage_over_time = np.zeros_like(time_points, dtype=int)
-            for t in time_points[:-1]:  # 各時刻 t での使用量を計算
+            # --- Renewable Resource の場合 (残量を表示) ---
+            remaining_over_time = np.zeros_like(time_points, dtype=int)
+            for t in time_points[:-1]:  # 各時刻 t での残量を計算
                 current_usage = 0
                 for task_id in all_active_tasks:
                     start_time = solver.value(task_starts[task_id])
@@ -347,15 +355,23 @@ def visualize_resource_usage(
                             recipe
                         ]
                         current_usage += demand
-                usage_over_time[t] = current_usage
+                # 使用量ではなく、総容量から引いた「残量」を格納
+                remaining_over_time[t] = capacity - current_usage
+            remaining_over_time[-1] = remaining_over_time[-2]
 
-            # ステッププロットで描画
-            ax.step(time_points, usage_over_time, where="post", label="Used Capacity")
-            ax.axhline(
-                y=capacity, color="r", linestyle="--", label=f"Max Capacity ({capacity})"
+            # ステッププロットで残量を描画
+            ax.step(
+                time_points, remaining_over_time, where="post", label="Remaining Capacity"
             )
-            ax.set_ylim(0, max(1, capacity * 1.1))
-            ax.set_ylabel("Usage")
+            # 最大容量と最小容量（0）を線で示す
+            ax.axhline(
+                y=capacity, color="g", linestyle="--", label=f"Max Capacity ({capacity})"
+            )
+            ax.axhline(
+                y=0, color="r", linestyle="--", label="Min Capacity (0)"
+            )
+            ax.set_ylim(-1, max(1, capacity * 1.1))
+            ax.set_ylabel("Remaining Capacity") # Y軸ラベルを修正
             ax.set_title(f"Renewable Resource {res_id}")
 
         else:  # Reservoir Resource (Non-Renewable) の場合
@@ -363,7 +379,6 @@ def visualize_resource_usage(
             level_over_time = np.zeros_like(time_points, dtype=int)
             initial_level = capacity  # 初期レベルは最大容量と仮定
 
-            # イベント（タスク開始）を時間順にソート
             events = []
             for task_id in all_active_tasks:
                 start_time = solver.value(task_starts[task_id])
@@ -380,9 +395,8 @@ def visualize_resource_usage(
                     current_level -= events[event_idx][1]
                     event_idx += 1
                 level_over_time[t] = current_level
-            level_over_time[-1] = level_over_time[-2] # 最後の点を描画
+            level_over_time[-1] = level_over_time[-2]
 
-            # ステッププロットで描画
             ax.step(time_points, level_over_time, where="post", label="Remaining Level")
             min_capacity = resource.min_capacity if resource.min_capacity != 0 else 0
             ax.axhline(
@@ -400,16 +414,14 @@ def visualize_resource_usage(
 
         ax.grid(True, which="major", linestyle="--", linewidth=0.5)
         ax.legend()
+        ax.tick_params(labelbottom=True)
 
     # X軸の設定
     plt.xlabel("Time")
     plt.xlim(0, makespan)
     plt.xticks(range(makespan + 1))
-    plt.tight_layout(rect=[0, 0, 1, 0.96])  # suptitleとの重なりを避ける
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
     plt.show()
-
-
-# ▲▲▲【NEW】ここまで関数を追加 ▲▲▲
 
 
 def solve_rcpsp(
@@ -717,6 +729,16 @@ def solve_rcpsp(
 
     # Print Schedule
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+        selected_recipes = {}
+        for t in all_active_tasks:
+            if len(task_to_presence_literals[t]) > 1:
+                for r, literal in enumerate(task_to_presence_literals[t]):
+                    if solver.value(literal):
+                        selected_recipes[t] = r
+                        break
+            else:
+                selected_recipes[t] = 0
+        
         # 1. タスクごとのスケジュールをコンソールに表示
         print_schedule_by_task(
             solver=solver,
@@ -736,17 +758,8 @@ def solve_rcpsp(
             task_ends=task_ends,
             task_to_resource_demands=task_to_resource_demands,
             all_resources=all_resources,
+            selected_recipes=selected_recipes,
         )
-
-        selected_recipes = {}
-        for t in all_active_tasks:
-            if len(task_to_presence_literals[t]) > 1:
-                for r, literal in enumerate(task_to_presence_literals[t]):
-                    if solver.value(literal):
-                        selected_recipes[t] = r
-                        break
-            else:
-                selected_recipes[t] = 0
 
         # 3. ガントチャートを可視化
         visualize_schedule(
