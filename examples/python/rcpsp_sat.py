@@ -101,6 +101,7 @@ def print_schedule_by_task(
     task_starts: dict,
     task_durations: dict,
     task_ends: dict,
+    selected_recipes: dict,
 ) -> None:
     """
     タスクごとにスケジュール（開始、期間、終了時刻）を表示する関数
@@ -124,11 +125,16 @@ def print_schedule_by_task(
         start_val = solver.value(task_starts[t])
         duration_val = solver.value(task_durations[t])
         end_val = solver.value(task_ends[t])
+        recipe_index = selected_recipes.get(t, "N/A")
+        display_mode = (
+            recipe_index + 1 if isinstance(recipe_index, int) else recipe_index
+        )
         print(
-            f"Task {t:2}: "
+            f"Task {t:2} "
+            f"(Mode {display_mode}): "
             f"Start={start_val:<3} "
             f"Duration={duration_val:<3} "
-            f"End={end_val:<3}"
+            f"End={end_val:<3} "
         )
 
     # 終了ダミータスクを表示
@@ -748,6 +754,7 @@ def solve_rcpsp(
             task_starts=task_starts,
             task_durations=task_durations,
             task_ends=task_ends,
+            selected_recipes=selected_recipes,
         )
         # 2. 時刻ごとのスケジュールをコンソールに表示
         print_schedule_by_time_step(
