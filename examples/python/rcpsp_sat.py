@@ -361,7 +361,7 @@ def print_schedule_by_time_step(
     mode_to_name: dict,
 ):
     """
-    時刻ごとに実行中のタスクとリソースの状態を表示する関数（再修正版）
+    時刻ごとに実行中のタスクとリソースの状態を表示する関数
     Reservoirの正しい仕様（初期値0、生産が正）に基づいて表示を修正
     """
     print("\n--- Schedule by Time Step ---")
@@ -597,14 +597,17 @@ def visualize_resource_usage(
 
             # ステッププロットで残量を描画
             ax.step(
-                time_points, remaining_over_time, where="post", label="Remaining Capacity"
+                time_points, remaining_over_time, where="post", label="Remaining Capacity",
+                linewidth=4
             )
             # 最大容量と最小容量（0）を線で示す
             ax.axhline(
-                y=capacity, color="g", linestyle="--", label=f"Max Capacity ({capacity})"
+                y=capacity, color="g", linestyle="--", label=f"Max Capacity ({capacity})",
+                linewidth=1
             )
             ax.axhline(
-                y=0, color="r", linestyle="--", label="Min Capacity (0)"
+                y=0, color="r", linestyle="--", label="Min Capacity (0)",
+                linewidth=1
             )
             ax.set_ylim(-1, max(1, capacity * 1.1))
             ax.set_ylabel("Remaining Capacity") # Y軸ラベルを修正
@@ -633,17 +636,15 @@ def visualize_resource_usage(
                 level_over_time[t] = current_level
             level_over_time[-1] = level_over_time[-2]
 
-            ax.step(time_points, level_over_time, where="post", label="Remaining Level")
-            min_capacity = resource.min_capacity if resource.min_capacity != 0 else 0
+            ax.step(time_points, level_over_time, where="post", label="Remaining Level",
+                    linewidth=4)
+            min_capacity = 0
             ax.axhline(
-                y=capacity, color="g", linestyle="--", label=f"Max Level ({capacity})"
-            )
+                y=capacity, color="g", linestyle="--", label=f"Max Level ({capacity})",
+                linewidth=1)
             ax.axhline(
-                y=min_capacity,
-                color="r",
-                linestyle="--",
-                label=f"Min Level ({min_capacity})",
-            )
+                y=min_capacity, color="r", linestyle="--", label=f"Min Level ({min_capacity})",
+                linewidth=1)
             ax.set_ylim(min(0, min_capacity) - 1, max(1, capacity * 1.1))
             ax.set_ylabel("Level")
             ax.set_title(f"Reservoir Resource {res_id}")
@@ -711,7 +712,7 @@ def _process_and_display_solution(
     print_schedule_by_task(
         solver=solver,
         all_active_tasks=all_active_tasks,
-        executed_tasks=executed_tasks, # 変更
+        executed_tasks=executed_tasks,
         source=source,
         sink=sink,
         task_starts=task_starts,
@@ -758,7 +759,7 @@ def _process_and_display_solution(
         task_ends=task_ends,
         selected_recipes=selected_recipes,
         task_resource_to_fixed_demands=task_resource_to_fixed_demands,
-        title=f"Resource Usage for '{problem.name}'",
+        title=f"Resource Usage for '{project_name}'",
     )
 
 
@@ -1027,13 +1028,13 @@ def solve_rcpsp(
                         reservoir_actives.append(is_recipe_r_active)
                         total_consumption_terms.append(demand * is_recipe_r_active)
 
-                min_cap = resource.min_capacity if resource.min_capacity != 0 else 0
+                min_capacity = 0
                 # 複数モードに対応したReservoir Resource制約
                 model.AddReservoirConstraintWithActive(
                     reservoir_times,
                     reservoir_demands,
                     reservoir_actives,
-                    min_cap,
+                    min_capacity,
                     resource.max_capacity,
                 )
                 # プロジェクト全体でのReservoir Resource消費量に関する制約
@@ -1132,18 +1133,18 @@ def main(_):
                 "name": "kitchen",
                 "duration": 30
             },
-            {
-                "name": "IH",
-                "duration": 20
-            },
-            {
-                "name": "faucet",
-                "duration": 25
-            },
-            {
-                "name": "fridge",
-                "duration": 15
-            },
+            # {
+            #     "name": "IH",
+            #     "duration": 20
+            # },
+            # {
+            #     "name": "faucet",
+            #     "duration": 25
+            # },
+            # {
+            #     "name": "fridge",
+            #     "duration": 15
+            # },
             {
                 "name": "wall",
                 "duration": 36
