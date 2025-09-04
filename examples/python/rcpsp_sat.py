@@ -482,7 +482,11 @@ def _process_and_display_solution(
         
         # literalsが[1]（必須タスク）であるか、
         # またはブール変数のリストの合計が1（オプショナルタスクが選択された）の場合
-        if literals == [1] or sum(solver.value(lit) for lit in literals) == 1:
+        # if literals == [1] or sum(solver.value(lit) for lit in literals) == 1:
+        #     executed_tasks.append(t)
+        if (len(literals) == 1 and isinstance(literals[0], int)) or sum(
+            solver.value(lit) for lit in literals
+        ) == 1:
             executed_tasks.append(t)
 
     # 最初に選択されたレシピを特定する
@@ -596,7 +600,6 @@ def solve_rcpsp(
 
     resource_to_sum_of_demand_max = collections.defaultdict(int)
 
-    # ▼▼▼ 修正点 ▼▼▼
     # 各タスクが実行されたかを示す代表ブール変数を格納する辞書
     is_present_literals = {}
 
@@ -609,7 +612,6 @@ def solve_rcpsp(
         start_var = model.new_int_var(0, horizon, f"start_of_task_{t}")
         end_var = model.new_int_var(0, horizon, f"end_of_task_{t}")
 
-        # ▼▼▼ 修正点 ▼▼▼
         # optional_tasks に基づいて literals を定義
         if num_recipes > 1:
             literals = [model.new_bool_var(f"is_present_{t}_{r}") for r in all_recipes]
@@ -623,16 +625,15 @@ def solve_rcpsp(
             else:
                 literals = [1]
         
-        # ▼▼▼ 修正点 ▼▼▼
         # タスクtが実行されたことを示す代表変数 is_present を作成
-        if literals == [1]:
+        # if literals == [1]:
+        if len(literals) == 1 and isinstance(literals[0], int):
             is_present = model.new_constant(1)
         else:
             # literalsがブール変数のリストの場合
             is_present = model.new_bool_var(f"is_present_{t}")
             model.add(is_present == sum(literals))
         is_present_literals[t] = is_present
-        # ▲▲▲ 修正ここまで ▲▲▲
 
         # Temporary data structure to fill in 0 demands.
         demand_matrix = collections.defaultdict(int)
@@ -826,9 +827,9 @@ def solve_rcpsp(
                     resource.max_capacity,
                 )
                 # プロジェクト全体でのReservoir Resource消費量に関する制約
-                # model.add(
-                #     cp_model.LinearExpr.sum(total_consumption_terms) == resource.max_capacity
-                # )
+                model.add(
+                    cp_model.LinearExpr.sum(total_consumption_terms) == 0
+                )
 
     # Objective.
     if problem.is_resource_investment:
@@ -909,8 +910,9 @@ def main(_):
         proto_file=_OUTPUT_PROTO.value,
         params=_PARAMS.value,
         active_tasks=set(range(1, last_task)),
-        optional_tasks={},
+        # optional_tasks={},
         # optional_tasks={1,2,3,4,5,6,7,8,9,10},
+        optional_tasks={1,3,4,6},
         source=0,
         sink=last_task,
     )
