@@ -22,6 +22,8 @@ Data use in flags:
 """
 
 import collections
+import io
+import tempfile
 
 from absl import app
 from absl import flags
@@ -35,7 +37,7 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import numpy as np
 
-_INPUT = flags.DEFINE_string("input", "", "Input file to parse and solve.")
+# _INPUT = flags.DEFINE_string("input", "", "Input file to parse and solve.")
 _OUTPUT_PROTO = flags.DEFINE_string(
     "output_proto", "", "Output file to write the cp_model proto to."
 )
@@ -46,6 +48,160 @@ _USE_INTERVAL_MAKESPAN = flags.DEFINE_bool(
     "Whether we encode the makespan using an interval or not.",
 )
 _HORIZON = flags.DEFINE_integer("horizon", -1, "Force horizon.")
+
+
+def generate_rcpsp_max_from_json(input_data):
+    """
+    指定されたJSONデータから、最終仕様のRCPSP/max形式の文字列を生成します。
+    - ヘッダーのアクティビティ数を 3*N に変更
+    - (3n-2)配置アクティビティのRenewable n+1資源の消費を0に変更
+    - 全てのアクティビティIDを 0-based index に統一
+    - 複数モード時の2モード目以降のID表記を省略
+    - 後続タスクがない行の末尾の空白を削除
+    - ファイル全体の最後にある改行を削除
+    """
+    # --------------------------------------------------------------------------
+    # 2. データの解析と基本パラメータの設定
+    # --------------------------------------------------------------------------
+    # JSONデータを扱いやすい辞書形式に変換
+    config = {key: value for item in input_data for key, value in item.items()}
+    
+    tasks = config.get('task', [])
+    N = len(tasks)
+
+    # 再生可能リソース(Renewable)と貯蔵可能リソース(Reservoir)の総数を計算
+    num_renewable = 1 + N
+    num_reservoir = 1 + (2 * N)
+
+    # --------------------------------------------------------------------------
+    # 3. アクティビティ情報の構築 (IDは0から開始)
+    # --------------------------------------------------------------------------
+    activities = {}
+
+    # ダミーの開始アクティビティ (ID: 0)
+    start_successors = [id for n in range(1, N + 1) for id in (3 * n - 2, 3 * n - 1)]
+    activities[0] = {
+        'cost': 0, 'modes': 1, 'successors': start_successors,
+        'demands': {1: [0] * (num_renewable + num_reservoir)}
+    }
+
+    # タスク関連のアクティビティ (ID: 1 から 3N まで)
+    for n in range(1, N + 1):
+        task_index = n - 1
+        task_cost = tasks[task_index]['cost']
+        
+        # 各アクティビティのIDを定義
+        placement_id = 3 * n - 2
+        work_id = 3 * n - 1
+        retrieval_id = 3 * n
+        final_activity_id = 3 * N + 1
+
+        # --- (3n-2): 配置アクティビティ ---
+        demands_placement = [0] * (num_renewable + num_reservoir)
+        demands_placement[0] = 1                              # Renewable 1
+        demands_placement[n] = 0                              # Renewable n+1
+        demands_placement[num_renewable] = 1                  # Reservoir 1
+        demands_placement[num_renewable + n] = 1              # Reservoir n+1
+        demands_placement[num_renewable + N + n] = 1          # Reservoir N+n+1
+        activities[placement_id] = {
+            'cost': 5, 'modes': 1, 'successors': [work_id],
+            'demands': {1: demands_placement}
+        }
+
+        # --- (3n-1): 作業アクティビティ ---
+        # モード1のリソース消費
+        demands_work_m1 = [0] * (num_renewable + num_reservoir)
+        demands_work_m1[0] = 1                                # Renewable 1
+        demands_work_m1[n] = 1                                # Renewable n+1
+        
+        # モード2のリソース消費
+        demands_work_m2 = [0] * (num_renewable + num_reservoir)
+        demands_work_m2[num_renewable + n] = -1               # Reservoir n+1 (返却)
+        
+        activities[work_id] = {
+            'cost': task_cost, 'modes': 2, 'successors': [retrieval_id, final_activity_id],
+            'demands': {1: demands_work_m1, 2: demands_work_m2}
+        }
+
+        # --- (3n): 回収アクティビティ ---
+        demands_retrieval = [0] * (num_renewable + num_reservoir)
+        demands_retrieval[0] = 1                              # Renewable 1
+        demands_retrieval[num_renewable] = -1                 # Reservoir 1 (返却)
+        demands_retrieval[num_renewable + N + n] = -1         # Reservoir N+n+1 (返却)
+        activities[retrieval_id] = {
+            'cost': 5, 'modes': 1, 'successors': [final_activity_id],
+            'demands': {1: demands_retrieval}
+        }
+
+    # ダミーの終了アクティビティ (ID: 3N+1)
+    activities[3 * N + 1] = {
+        'cost': 0, 'modes': 1, 'successors': [],
+        'demands': {1: [0] * (num_renewable + num_reservoir)}
+    }
+
+    # --------------------------------------------------------------------------
+    # 4. RCPSP/max 形式の文字列を生成
+    # --------------------------------------------------------------------------
+    # 出力する全ての行をこのリストに保存する
+    output_lines = []
+
+    # ヘッダー行
+    output_lines.append(f"{3 * N} {num_renewable} {num_reservoir} 0")
+
+    # 先行関係ブロック (0-based)
+    for i in sorted(activities.keys()):
+        act = activities[i]
+        num_succ = len(act['successors'])
+        
+        # 行の各部分をリストとして構築する
+        line_parts = [str(i), str(act['modes']), str(num_succ)]
+        
+        # 後続タスクがある場合のみ、後続IDと遅延時間をリストに追加
+        if num_succ > 0:
+            line_parts.append(' '.join(map(str, act['successors'])))
+            delay_str_parts = []
+            for succ_id in act['successors']:
+                succ_act = activities[succ_id]
+                num_delays = act['modes'] * succ_act['modes']
+                delays = [str(act['cost'])] * num_delays
+                delay_str_parts.append(f"[{' '.join(delays)}]")
+            line_parts.append(' '.join(delay_str_parts))
+        
+        # 最終的にリストをスペースで連結して行を完成させる
+        output_lines.append(' '.join(line_parts))
+    
+    # リソース消費ブロック (0-based)
+    for i in sorted(activities.keys()):
+        act = activities[i]
+        for mode_num in sorted(act['demands'].keys()):
+            demands = ' '.join(map(str, act['demands'][mode_num]))
+            if mode_num == 1:
+                # 最初のモードはアクティビティIDから出力
+                output_lines.append(f"{i} {mode_num} {act['cost']} {demands}")
+            else:
+                # 2番目以降のモードはIDを省略し、スペースから始める
+                output_lines.append(f" {mode_num} {act['cost']} {demands}")
+
+    # リソース上限ブロック
+    renewable_caps = [config['robot']['quantity']] + [1] * N
+    reservoir_caps = [config['module']['quantity']] + [1] * (2 * N)
+    all_caps = renewable_caps + reservoir_caps
+    output_lines.append(' '.join(map(str, all_caps)))
+
+    return "\n".join(output_lines)
+
+
+def calculate_optional_tasks(input_data):
+    """Calculates the set of optional task indices from the input JSON data."""
+    tasks_data = next((item for item in input_data if 'task' in item), {}).get('task', [])
+    N = len(tasks_data)
+    optional_tasks = set()
+    for n in range(1, N + 1):
+        optional_tasks.add(3 * n - 2) # Placement task
+        optional_tasks.add(3 * n)     # Retrieval task
+    # print(f"Number of tasks (N): {N}")
+    # print(f"Optional tasks indices: {sorted(list(optional_tasks))}")
+    return optional_tasks
 
 
 def print_problem_statistics(problem: rcpsp_pb2.RcpspProblem):
@@ -897,26 +1053,45 @@ def solve_rcpsp(
 
 
 def main(_):
-    rcpsp_parser = rcpsp.RcpspParser()
-    rcpsp_parser.parse_file(_INPUT.value)
+    # 1. Define input JSON data
+    input_data = [
+        {"robot": {"name": "r8", "quantity": 1}},
+        {"module": {"name": "arm", "quantity": 2}},
+        {"task": [
+            {"name": "kitchen", "cost": 20},
+            {"name": "IH", "cost": 30},
+            # {"name": "table", "cost": 15},
+        ]}
+    ]
 
+    # 2. Generate RCPSP/max format string from JSON
+    rcpsp_data_string = generate_rcpsp_max_from_json(input_data)
+    print("--- Generated RCPSP/max data ---")
+    print(rcpsp_data_string)
+    print("---------------------------------")
+
+    # 3. Parse the problem from the generated string
+    rcpsp_parser = rcpsp.RcpspParser()
+    with tempfile.NamedTemporaryFile(mode='w+', delete=True, suffix='.sch') as temp_f:
+        temp_f.write(rcpsp_data_string)
+        temp_f.flush()
+        rcpsp_parser.parse_file(temp_f.name)
     problem = rcpsp_parser.problem()
     print_problem_statistics(problem)
 
+    # 4. Solve the problem
     last_task = len(problem.tasks) - 1
-
     status, results = solve_rcpsp(
         problem=problem,
         proto_file=_OUTPUT_PROTO.value,
         params=_PARAMS.value,
         active_tasks=set(range(1, last_task)),
-        # optional_tasks={},
-        # optional_tasks={1,2,3,4,5,6,7,8,9,10},
-        optional_tasks={1,3,4,6},
+        optional_tasks=calculate_optional_tasks(input_data),
         source=0,
         sink=last_task,
     )
 
+    # 5. Visualize result
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
         _process_and_display_solution(**results)
     elif status == cp_model.INFEASIBLE:
