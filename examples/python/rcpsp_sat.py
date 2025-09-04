@@ -719,7 +719,7 @@ def solve_rcpsp(
 
             for successor_index, next_id in enumerate(task.successors):
                 delay_matrix = task.successor_delays[successor_index]
-                
+
                 # Precedence is conditioned on the presence of task_id
                 enforcement_lit_t = [is_present_t]
 
@@ -784,10 +784,22 @@ def solve_rcpsp(
 
                 model.add_cumulative(intervals, demands, c)
         else:  # Non empty non renewable resource.
-            if problem.is_consumer_producer:
-                # This part may need adjustments for optional tasks if used.
-                pass  # Placeholder
-            else:  # Reservoir constraint
+            if problem.is_consumer_producer:  # single mode only
+                reservoir_starts = []
+                reservoir_demands = []
+                for t in all_active_tasks:
+                    if task_resource_to_fixed_demands[(t, res)][0]:
+                        reservoir_starts.append(task_starts[t])
+                        reservoir_demands.append(
+                            task_resource_to_fixed_demands[(t, res)][0]
+                        )
+                model.add_reservoir_constraint(
+                    reservoir_starts,
+                    reservoir_demands,
+                    resource.min_capacity,
+                    resource.max_capacity,
+                )
+            else:  # Reservoir constraint. Multi-mode compatible
                 reservoir_times = []
                 reservoir_demands = []
                 reservoir_actives = []
@@ -833,7 +845,7 @@ def solve_rcpsp(
     task_ends[source] = model.new_constant(0)
     task_to_presence_literals[0].append(model.new_constant(1))
     is_present_literals[source] = model.new_constant(1)
-    
+
     task_starts[sink] = makespan
     task_to_presence_literals[sink].append(model.new_constant(1))
     is_present_literals[sink] = model.new_constant(1)
