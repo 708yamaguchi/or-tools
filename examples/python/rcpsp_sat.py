@@ -187,6 +187,39 @@ def generate_rcpsp_max_from_json(input_data):
     return "\n".join(output_lines)
 
 
+def create_name_mappings(input_data: dict) -> (dict, dict):
+    """
+    入力JSONデータから、タスクIDとモード番号を自然言語にマッピングする辞書を生成する。
+    """
+    tasks = input_data.get('tasks', [])
+    N = len(tasks)
+
+    task_id_to_name = {}
+
+    # 特別なタスク (Start/Finish)
+    task_id_to_name[0] = "Start"
+    task_id_to_name[3 * N + 1] = "Finish"
+
+    # JSONのtasksに基づくタスク
+    for n in range(1, N + 1):
+        task_name = tasks[n - 1]['name']
+        placement_id = 3 * n - 2
+        work_id = 3 * n - 1
+        retrieval_id = 3 * n
+
+        task_id_to_name[placement_id] = f"Pre-{task_name}"
+        task_id_to_name[work_id] = f"{task_name}"
+        task_id_to_name[retrieval_id] = f"Post-{task_name}"
+
+    # モードのマッピング
+    mode_to_name = {
+        1: "by robot",
+        2: "by module",
+    }
+
+    return task_id_to_name, mode_to_name
+
+
 def calculate_optional_tasks(input_data):
     """
     新しいJSONデータ形式から、オプションタスクのインデックスセットを計算します。
@@ -255,6 +288,8 @@ def print_schedule_by_task(
     task_durations: dict,
     task_ends: dict,
     selected_recipes: dict,
+    task_id_to_name: dict,
+    mode_to_name: dict,
 ) -> None:
     """
     タスクごとにスケジュール（開始、期間、終了時刻）を表示する関数
@@ -264,10 +299,14 @@ def print_schedule_by_task(
     print("--------------------------------------------------")
     print("--- Schedule by Task (Skipped tasks included) ---")
 
+    # 表示幅を定義
+    name_width = max(len(name) for name in task_id_to_name.values()) + 2
+
     # 開始ダミータスクを表示
+    source_name = task_id_to_name.get(source, f"Task {source}")
     source_start_val = solver.value(task_starts[source])
     print(
-        f"Task {source:2}: "
+        f"{source_name:<{name_width}} "
         f"Start={source_start_val:<3} "
         f"Duration=0   "
         f"End={source_start_val:<3}  (Project Start)"
@@ -275,31 +314,34 @@ def print_schedule_by_task(
 
     # 全てのアクティブタスクをID順にループ
     for t in sorted(all_active_tasks):
+        task_name = task_id_to_name.get(t, f"Task {t}")
         if t in executed_tasks:
             # 実行されたタスクの情報を表示
             start_val = solver.value(task_starts[t])
             duration_val = solver.value(task_durations[t])
             end_val = solver.value(task_ends[t])
             recipe_index = selected_recipes.get(t, "N/A")
-            display_mode = (
-                recipe_index + 1 if isinstance(recipe_index, int) else recipe_index
-            )
+
+            display_mode_num = recipe_index + 1 if isinstance(recipe_index, int) else None
+            mode_str = mode_to_name.get(display_mode_num, f"Mode {display_mode_num}") if display_mode_num else "N/A"
+
             print(
-                f"Task {t:2} "
-                f"(Mode {display_mode}): "
+                f"{task_name:<{name_width}} "
+                f"({mode_str}): "
                 f"Start={start_val:<3} "
                 f"Duration={duration_val:<3} "
                 f"End={end_val:<3} "
             )
         else:
             # スキップされたタスクの情報を表示
-            print(f"Task {t:2}: --- SKIPPED ---")
+            print(f"{task_name:<{name_width}}: --- SKIPPED ---")
 
 
     # 終了ダミータスクを表示
+    sink_name = task_id_to_name.get(sink, f"Task {sink}")
     sink_start_val = solver.value(task_starts[sink])
     print(
-        f"Task {sink:2}: "
+        f"{sink_name:<{name_width}} "
         f"Start={sink_start_val:<3} "
         f"Duration=0   "
         f"End={sink_start_val:<3}  (Project End / Makespan)"
@@ -315,6 +357,8 @@ def print_schedule_by_time_step(
     task_to_resource_demands: dict,
     all_resources: range,
     selected_recipes: dict,
+    task_id_to_name: dict,
+    mode_to_name: dict,
 ):
     """
     時刻ごとに実行中のタスクとリソースの状態を表示する関数（再修正版）
@@ -335,10 +379,12 @@ def print_schedule_by_time_step(
             if start_time <= t < end_time:
                 running_tasks.append(task_id)
                 recipe_index = selected_recipes.get(task_id, "N/A")
-                display_mode = (
-                    recipe_index + 1 if isinstance(recipe_index, int) else recipe_index
-                )
-                running_tasks_with_mode.append(f"{task_id}(Mode {display_mode})")
+
+                display_mode_num = recipe_index + 1 if isinstance(recipe_index, int) else None
+                mode_str = mode_to_name.get(display_mode_num, f"Mode {display_mode_num}") if display_mode_num else "N/A"
+                task_name = task_id_to_name.get(task_id, f"Task {task_id}")
+
+                running_tasks_with_mode.append(f"{task_name}({mode_str})")
 
         print(f"[Time: {t}]")
         if not running_tasks_with_mode:
@@ -411,13 +457,18 @@ def visualize_schedule(
     task_starts: dict,
     task_durations: dict,
     selected_recipes: dict,
+    task_id_to_name: dict,
+    mode_to_name: dict,
     title: str = "Task Schedule Gantt Chart",
 ) -> None:
     """
     OR-Toolsのスケジューリング結果をガントチャートで可視化する関数
     """
     # --- 1. データの準備 ---
-    tasks_to_display = sorted(all_active_tasks)
+    # 表示順を担保するため、ダミーの開始・終了タスクも含めたIDリストでソート
+    all_task_ids = sorted(list(task_id_to_name.keys()))
+    # tasks_to_display = [t for t in all_task_ids if t in all_active_tasks or task_id_to_name[t] in ["Start", "Finish"]]
+    tasks_to_display = [t for t in all_task_ids if t in all_active_tasks]
 
     # 描画用のデータを格納するリスト
     y_labels = []
@@ -426,22 +477,20 @@ def visualize_schedule(
     bar_texts = []
 
     for t in tasks_to_display:
+        task_name = task_id_to_name.get(t, f"Task {t}")
         if t in executed_tasks:
             # 実行されたタスク
-            y_labels.append(f"Task {t}")
+            y_labels.append(task_name)
             starts.append(solver.value(task_starts[t]))
             durations.append(solver.value(task_durations[t]))
 
             recipe_index = selected_recipes.get(t, "N/A")
-            display_text = (
-                f"Mode {recipe_index + 1}"
-                if isinstance(recipe_index, int)
-                else f"Mode {recipe_index}"
-            )
+            display_mode_num = recipe_index + 1 if isinstance(recipe_index, int) else None
+            display_text = mode_to_name.get(display_mode_num, "") if display_mode_num else ""
             bar_texts.append(display_text)
         else:
             # スキップされたタスク
-            y_labels.append(f"Task {t} (Skipped)")
+            y_labels.append(f"{task_name} (Skipped)")
             starts.append(0)  # 開始時刻0
             durations.append(0) # 期間0 (バーは見えなくなる)
             bar_texts.append("") # テキストなし
@@ -624,6 +673,9 @@ def _process_and_display_solution(
     task_to_presence_literals: dict,
     task_to_resource_demands: dict,
     task_resource_to_fixed_demands: dict,
+    project_name: str,
+    task_id_to_name: dict,
+    mode_to_name: dict,
 ) -> None:
     """ソルバーの実行結果を処理し、コンソールとグラフで表示する"""
     # 実際に実行されたタスクのリストを作成する
@@ -666,6 +718,8 @@ def _process_and_display_solution(
         task_durations=task_durations,
         task_ends=task_ends,
         selected_recipes=selected_recipes,
+        task_id_to_name=task_id_to_name,
+        mode_to_name=mode_to_name,
     )
 
     # 2. 時刻ごとのスケジュールをコンソールに表示
@@ -678,6 +732,8 @@ def _process_and_display_solution(
         task_to_resource_demands=task_to_resource_demands,
         all_resources=all_resources,
         selected_recipes=selected_recipes,
+        task_id_to_name=task_id_to_name,
+        mode_to_name=mode_to_name,
     )
 
     # 3. ガントチャートを可視化
@@ -688,7 +744,9 @@ def _process_and_display_solution(
         task_starts=task_starts,
         task_durations=task_durations,
         selected_recipes=selected_recipes,
-        title=f"Task Schedule Gantt Chart for '{problem.name}'",
+        title=f"Task Schedule Gantt Chart for '{project_name}'",
+        task_id_to_name=task_id_to_name,
+        mode_to_name=mode_to_name,
     )
 
     # 4. リソース使用量を可視化
@@ -1030,6 +1088,7 @@ def solve_rcpsp(
 
     status = solver.solve(model)
 
+    # 結果にマッピング辞書を追加
     results = {
         "solver": solver,
         "problem": problem,
@@ -1053,30 +1112,53 @@ def main(_):
     input_data = {
         "project_name": "TestTask",
         "resources": {
+            # 可変長だが、今は長さ1を想定
             "renewable": [
                 {
                     "name": "r8_robot",
                     "capacity": 1
                 }
             ],
+            # 可変長で、将来的には複数モジュールが入ることを想定
             "reservoir": [
                 {
                     "name": "arm_module",
-                    "capacity": 0
+                    "capacity": 3
                 }
             ]
         },
         "tasks": [
             {
-                "name": "kitchen_assembly",
+                "name": "kitchen",
                 "duration": 30
             },
             {
-                "name": "IH_assembly",
+                "name": "IH",
                 "duration": 20
+            },
+            {
+                "name": "faucet",
+                "duration": 25
+            },
+            {
+                "name": "fridge",
+                "duration": 15
+            },
+            {
+                "name": "wall",
+                "duration": 36
+            },
+            {
+                "name": "table",
+                "duration": 15
             }
+
         ]
     }
+
+    # 1.5 マッピング辞書を生成
+    task_id_to_name, mode_to_name = create_name_mappings(input_data)
+
     # 2. Generate RCPSP/max format string from JSON
     rcpsp_data_string = generate_rcpsp_max_from_json(input_data)
     print("--- Generated RCPSP/max data ---")
@@ -1094,6 +1176,7 @@ def main(_):
 
     # 4. Solve the problem
     last_task = len(problem.tasks) - 1
+
     status, results = solve_rcpsp(
         problem=problem,
         proto_file=_OUTPUT_PROTO.value,
@@ -1106,7 +1189,12 @@ def main(_):
 
     # 5. Visualize result
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-        _process_and_display_solution(**results)
+        _process_and_display_solution(
+            project_name=input_data["project_name"],
+            task_id_to_name=task_id_to_name,
+            mode_to_name=mode_to_name,
+            **results,
+        )
     elif status == cp_model.INFEASIBLE:
         print("No solution found.")
 
