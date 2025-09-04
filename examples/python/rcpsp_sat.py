@@ -113,7 +113,7 @@ def generate_rcpsp_max_from_json(input_data):
         demands_work_m1 = [0] * (num_renewable + num_reservoir)
         demands_work_m1[0] = 1                                # Renewable 1
         demands_work_m1[n] = 1                                # Renewable n+1
-        
+
         # モード2のリソース消費
         demands_work_m2 = [0] * (num_renewable + num_reservoir)
         demands_work_m2[num_renewable + n] = -1               # Reservoir n+1 (返却)
@@ -152,7 +152,7 @@ def generate_rcpsp_max_from_json(input_data):
         act = activities[i]
         num_succ = len(act['successors'])
         line_parts = [str(i), str(act['modes']), str(num_succ)]
-        
+
         if num_succ > 0:
             line_parts.append(' '.join(map(str, act['successors'])))
             delay_str_parts = []
@@ -162,9 +162,9 @@ def generate_rcpsp_max_from_json(input_data):
                 delays = [str(act['cost'])] * num_delays
                 delay_str_parts.append(f"[{' '.join(delays)}]")
             line_parts.append(' '.join(delay_str_parts))
-        
+
         output_lines.append(' '.join(line_parts))
-    
+
     # リソース消費ブロック
     for i in sorted(activities.keys()):
         act = activities[i]
@@ -178,7 +178,7 @@ def generate_rcpsp_max_from_json(input_data):
     # リソース上限ブロック
     robot_quantity = input_data['resources']['renewable'][0]['capacity']
     module_quantity = input_data['resources']['reservoir'][0]['capacity']
-    
+
     renewable_caps = [robot_quantity] + [1] * N
     reservoir_caps = [module_quantity] + [1] * (2 * N)
     all_caps = renewable_caps + reservoir_caps
@@ -684,7 +684,7 @@ def _process_and_display_solution(
     for t in all_active_tasks:
         # タスクtの presence literals を取得
         literals = task_to_presence_literals[t]
-        
+
         # literalsが[1]（必須タスク）であるか、
         # またはブール変数のリストの合計が1（オプショナルタスクが選択された）の場合
         # if literals == [1] or sum(solver.value(lit) for lit in literals) == 1:
@@ -835,7 +835,7 @@ def solve_rcpsp(
                 literals = [model.new_bool_var(f"is_present_{t}_0")]
             else:
                 literals = [1]
-        
+
         # タスクtが実行されたことを示す代表変数 is_present を作成
         # if literals == [1]:
         if len(literals) == 1 and isinstance(literals[0], int):
@@ -920,7 +920,7 @@ def solve_rcpsp(
         model.new_constant(horizon + 1),
         "interval_makespan",
     )
-    
+
     # Add precedences.
     if problem.is_rcpsp_max:
         # In RCPSP/Max problem, precedences are given and max delay (possible
