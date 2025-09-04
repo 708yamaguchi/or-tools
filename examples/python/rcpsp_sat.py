@@ -803,7 +803,7 @@ def solve_rcpsp(
                 reservoir_times = []
                 reservoir_demands = []
                 reservoir_actives = []
-
+                total_consumption_terms = []
                 for t in all_active_tasks:
                     num_recipes_t = len(problem.tasks[t].recipes)
                     for r in range(num_recipes_t):
@@ -814,8 +814,10 @@ def solve_rcpsp(
                         reservoir_demands.append(demand)
                         is_recipe_r_active = task_to_presence_literals[t][r]
                         reservoir_actives.append(is_recipe_r_active)
-                
+                        total_consumption_terms.append(demand * is_recipe_r_active)
+
                 min_cap = resource.min_capacity if resource.min_capacity != 0 else 0
+                # 複数モードに対応したReservoir Resource制約
                 model.AddReservoirConstraintWithActive(
                     reservoir_times,
                     reservoir_demands,
@@ -823,6 +825,10 @@ def solve_rcpsp(
                     min_cap,
                     resource.max_capacity,
                 )
+                # プロジェクト全体でのReservoir Resource消費量に関する制約
+                # model.add(
+                #     cp_model.LinearExpr.sum(total_consumption_terms) == resource.max_capacity
+                # )
 
     # Objective.
     if problem.is_resource_investment:
