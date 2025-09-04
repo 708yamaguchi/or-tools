@@ -52,21 +52,21 @@ _HORIZON = flags.DEFINE_integer("horizon", -1, "Force horizon.")
 
 def generate_rcpsp_max_from_json(input_data):
     """
-    指定されたJSONデータから、最終仕様のRCPSP/max形式の文字列を生成します。
-    - ヘッダーのアクティビティ数を 3*N に変更
-    - (3n-2)配置アクティビティのRenewable n+1資源の消費を0に変更
-    - 全てのアクティビティIDを 0-based index に統一
-    - 複数モード時の2モード目以降のID表記を省略
-    - 後続タスクがない行の末尾の空白を削除
-    - ファイル全体の最後にある改行を削除
+    新しいJSONデータ形式から、RCPSP/max形式の文字列を生成します。
+
+    Args:
+        input_data (dict): プロジェクト情報を含むJSONオブジェクト。
+                           - resources.renewable[0].capacity: ロボットの台数
+                           - resources.reservoir[0].capacity: モジュールの数
+                           - tasks: タスクのリスト (name, duration)
+
+    Returns:
+        str: RCPSP/max形式にフォーマットされた文字列。
     """
     # --------------------------------------------------------------------------
-    # 2. データの解析と基本パラメータの設定
+    # 1. データの解析と基本パラメータの設定
     # --------------------------------------------------------------------------
-    # JSONデータを扱いやすい辞書形式に変換
-    config = {key: value for item in input_data for key, value in item.items()}
-    
-    tasks = config.get('task', [])
+    tasks = input_data.get('tasks', [])
     N = len(tasks)
 
     # 再生可能リソース(Renewable)と貯蔵可能リソース(Reservoir)の総数を計算
@@ -74,7 +74,7 @@ def generate_rcpsp_max_from_json(input_data):
     num_reservoir = 1 + (2 * N)
 
     # --------------------------------------------------------------------------
-    # 3. アクティビティ情報の構築 (IDは0から開始)
+    # 2. アクティビティ情報の構築 (IDは0から開始)
     # --------------------------------------------------------------------------
     activities = {}
 
@@ -88,8 +88,8 @@ def generate_rcpsp_max_from_json(input_data):
     # タスク関連のアクティビティ (ID: 1 から 3N まで)
     for n in range(1, N + 1):
         task_index = n - 1
-        task_cost = tasks[task_index]['cost']
-        
+        task_duration = tasks[task_index]['duration']
+
         # 各アクティビティのIDを定義
         placement_id = 3 * n - 2
         work_id = 3 * n - 1
@@ -117,9 +117,9 @@ def generate_rcpsp_max_from_json(input_data):
         # モード2のリソース消費
         demands_work_m2 = [0] * (num_renewable + num_reservoir)
         demands_work_m2[num_renewable + n] = -1               # Reservoir n+1 (返却)
-        
+
         activities[work_id] = {
-            'cost': task_cost, 'modes': 2, 'successors': [retrieval_id, final_activity_id],
+            'cost': task_duration, 'modes': 2, 'successors': [retrieval_id, final_activity_id],
             'demands': {1: demands_work_m1, 2: demands_work_m2}
         }
 
@@ -140,23 +140,19 @@ def generate_rcpsp_max_from_json(input_data):
     }
 
     # --------------------------------------------------------------------------
-    # 4. RCPSP/max 形式の文字列を生成
+    # 3. RCPSP/max 形式の文字列を生成
     # --------------------------------------------------------------------------
-    # 出力する全ての行をこのリストに保存する
     output_lines = []
 
     # ヘッダー行
     output_lines.append(f"{3 * N} {num_renewable} {num_reservoir} 0")
 
-    # 先行関係ブロック (0-based)
+    # 先行関係ブロック
     for i in sorted(activities.keys()):
         act = activities[i]
         num_succ = len(act['successors'])
-        
-        # 行の各部分をリストとして構築する
         line_parts = [str(i), str(act['modes']), str(num_succ)]
         
-        # 後続タスクがある場合のみ、後続IDと遅延時間をリストに追加
         if num_succ > 0:
             line_parts.append(' '.join(map(str, act['successors'])))
             delay_str_parts = []
@@ -167,24 +163,24 @@ def generate_rcpsp_max_from_json(input_data):
                 delay_str_parts.append(f"[{' '.join(delays)}]")
             line_parts.append(' '.join(delay_str_parts))
         
-        # 最終的にリストをスペースで連結して行を完成させる
         output_lines.append(' '.join(line_parts))
     
-    # リソース消費ブロック (0-based)
+    # リソース消費ブロック
     for i in sorted(activities.keys()):
         act = activities[i]
         for mode_num in sorted(act['demands'].keys()):
             demands = ' '.join(map(str, act['demands'][mode_num]))
             if mode_num == 1:
-                # 最初のモードはアクティビティIDから出力
                 output_lines.append(f"{i} {mode_num} {act['cost']} {demands}")
             else:
-                # 2番目以降のモードはIDを省略し、スペースから始める
                 output_lines.append(f" {mode_num} {act['cost']} {demands}")
 
     # リソース上限ブロック
-    renewable_caps = [config['robot']['quantity']] + [1] * N
-    reservoir_caps = [config['module']['quantity']] + [1] * (2 * N)
+    robot_quantity = input_data['resources']['renewable'][0]['capacity']
+    module_quantity = input_data['resources']['reservoir'][0]['capacity']
+    
+    renewable_caps = [robot_quantity] + [1] * N
+    reservoir_caps = [module_quantity] + [1] * (2 * N)
     all_caps = renewable_caps + reservoir_caps
     output_lines.append(' '.join(map(str, all_caps)))
 
@@ -192,15 +188,15 @@ def generate_rcpsp_max_from_json(input_data):
 
 
 def calculate_optional_tasks(input_data):
-    """Calculates the set of optional task indices from the input JSON data."""
-    tasks_data = next((item for item in input_data if 'task' in item), {}).get('task', [])
+    """
+    新しいJSONデータ形式から、オプションタスクのインデックスセットを計算します。
+    """
+    tasks_data = input_data.get('tasks', [])
     N = len(tasks_data)
     optional_tasks = set()
     for n in range(1, N + 1):
-        optional_tasks.add(3 * n - 2) # Placement task
-        optional_tasks.add(3 * n)     # Retrieval task
-    # print(f"Number of tasks (N): {N}")
-    # print(f"Optional tasks indices: {sorted(list(optional_tasks))}")
+        optional_tasks.add(3 * n - 2) # 配置タスク
+        optional_tasks.add(3 * n)     # 回収タスク
     return optional_tasks
 
 
@@ -1054,16 +1050,33 @@ def solve_rcpsp(
 
 def main(_):
     # 1. Define input JSON data
-    input_data = [
-        {"robot": {"name": "r8", "quantity": 1}},
-        {"module": {"name": "arm", "quantity": 2}},
-        {"task": [
-            {"name": "kitchen", "cost": 20},
-            {"name": "IH", "cost": 30},
-            # {"name": "table", "cost": 15},
-        ]}
-    ]
-
+    input_data = {
+        "project_name": "TestTask",
+        "resources": {
+            "renewable": [
+                {
+                    "name": "r8_robot",
+                    "capacity": 1
+                }
+            ],
+            "reservoir": [
+                {
+                    "name": "arm_module",
+                    "capacity": 0
+                }
+            ]
+        },
+        "tasks": [
+            {
+                "name": "kitchen_assembly",
+                "duration": 30
+            },
+            {
+                "name": "IH_assembly",
+                "duration": 20
+            }
+        ]
+    }
     # 2. Generate RCPSP/max format string from JSON
     rcpsp_data_string = generate_rcpsp_max_from_json(input_data)
     print("--- Generated RCPSP/max data ---")
