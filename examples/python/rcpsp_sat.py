@@ -184,68 +184,103 @@ def generate_rcpsp_max_from_json(input_data):
         final_activity_id = 3 * N + 1
         
         demands_placement, demands_work, demands_retrieval = {}, {}, {}
-        combos_by_mode = {} # モードごとのリソース名を保存する辞書
 
-        # ★修正箇所: 配置・作業・回収のモードをcomboに依存させる
+        # モード数をタスク種別ごとに定義
+        num_work_modes = len(combinations_for_task) if combinations_for_task else 1
+        # 配置・回収モード数は combo数 * ロボット数
+        num_placement_retrieval_modes = num_work_modes * num_actual_robots if combinations_for_task and num_actual_robots > 0 else 1
+
+        # デバッグ用の情報保存
+        w_combos_by_mode = {}
+        pr_combos_by_mode = {}
+
         if not combinations_for_task: # 組み合わせがない場合
             demands_placement[1] = [0] * total_resources
             demands_work[1] = [0] * total_resources
             demands_retrieval[1] = [0] * total_resources
         else:
+            # --- 作業モードのデマンド (モード数はcombo数に依存) ---
             for i, combo in enumerate(combinations_for_task):
                 mode_num = i + 1
-                combos_by_mode[mode_num] = combo # 辞書に保存
+                w_combos_by_mode[mode_num] = combo
                 is_module_combo = any(res_name in module_map for res_name in combo)
-                
-                # --- 配置モードのデマンド ---
-                demands_p_mode = [0] * total_resources
-                for res_name in combo:
-                    if res_name in robot_map:
-                        demands_p_mode[robot_map[res_name]] = 1
-                    elif res_name in module_map:
-                        demands_p_mode[num_renewable + module_map[res_name]] = 1
-                if is_module_combo:
-                    demands_p_mode[num_renewable + num_actual_modules + (n - 1)] = 1
-                    demands_p_mode[num_renewable + num_actual_modules + N + (n - 1)] = 1
-                demands_placement[mode_num] = demands_p_mode
+                is_robot_combo = any(res_name in robot_map for res_name in combo)
 
-                # --- 作業モードのデマンド ---
                 demands_w_mode = [0] * total_resources
                 if is_module_combo:
-                    demands_w_mode[num_renewable + num_actual_modules + (n - 1)] = -1
-                else:
-                    robot_name = combo[0]
-                    demands_w_mode[robot_map[robot_name]] = 1
-                    demands_w_mode[num_actual_robots + (n - 1)] = 1
+                    for resource_name in combo:
+                        if resource_name in module_map:
+                            demands_w_mode[num_renewable + num_actual_modules + (n - 1)] = -1
+                if is_robot_combo:
+                    for resource_name in combo:
+                        if resource_name in robot_map:
+                            demands_w_mode[robot_map[resource_name]] = 1
+                            demands_w_mode[num_actual_robots + (n - 1)] += 1
                 demands_work[mode_num] = demands_w_mode
+            
+            # --- 配置・回収モードのデマンド (モード数は combo数 * ロボット数) ---
+            mode_num_pr = 0
+            for i, combo in enumerate(combinations_for_task):
+                is_module_combo = any(res_name in module_map for res_name in combo)
+                # さらにロボットの数だけループ（配置・回収するロボットはなんでもいい）
+                for j in range(num_actual_robots):
+                    mode_num_pr += 1
+                    pr_combos_by_mode[mode_num_pr] = (combo, j)
 
-                # --- 回収モードのデマンド ---
-                demands_r_mode = [0] * total_resources
-                for res_name in combo:
-                    if res_name in robot_map:
-                        demands_r_mode[robot_map[res_name]] = 1
-                if is_module_combo:
+                    # --- 配置モードのデマンド ---
+                    demands_p_mode = [0] * total_resources
+                    # j番目のロボットを1消費
+                    demands_p_mode[j] = 1
+                    # モジュールとロックの要求
                     for res_name in combo:
                         if res_name in module_map:
-                            demands_r_mode[num_renewable + module_map[res_name]] = -1
-                    demands_r_mode[num_renewable + num_actual_modules + N + (n - 1)] = -1
-                demands_retrieval[mode_num] = demands_r_mode
+                            demands_p_mode[num_renewable + module_map[res_name]] = 1
+                    if is_module_combo:
+                        demands_p_mode[num_renewable + num_actual_modules + (n - 1)] = 1
+                        demands_p_mode[num_renewable + num_actual_modules + N + (n - 1)] = 1
+                    demands_placement[mode_num_pr] = demands_p_mode
 
-        activities[placement_id] = {'cost': 5, 'modes': num_modes, 'successors': [work_id], 'demands': demands_placement}
-        activities[work_id] = {'cost': task_duration, 'modes': num_modes, 'successors': [retrieval_id], 'demands': demands_work}
-        activities[retrieval_id] = {'cost': 5, 'modes': num_modes, 'successors': [final_activity_id], 'demands': demands_retrieval}
+                    # --- 回収モードのデマンド ---
+                    demands_r_mode = [0] * total_resources
+                    # j番目のロボットを1消費
+                    demands_r_mode[j] = 1
+                    # モジュールとロックの返却
+                    if is_module_combo:
+                        for res_name in combo:
+                            if res_name in module_map:
+                                demands_r_mode[num_renewable + module_map[res_name]] = -1
+                        demands_r_mode[num_renewable + num_actual_modules + N + (n - 1)] = -1
+                    demands_retrieval[mode_num_pr] = demands_r_mode
 
-        # デバッグ出力: タスク情報の整理
+
+        activities[placement_id] = {'cost': 5, 'modes': num_placement_retrieval_modes, 'successors': [work_id], 'demands': demands_placement}
+        activities[work_id] = {'cost': task_duration, 'modes': num_work_modes, 'successors': [retrieval_id], 'demands': demands_work}
+        activities[retrieval_id] = {'cost': 5, 'modes': num_placement_retrieval_modes, 'successors': [final_activity_id], 'demands': demands_retrieval}
+        
+        # デバッグ出力
         print(f"--- Task {n} ({task['name']}) -----------------")
-        print(f"  Placement ID: {placement_id}, Work ID: {work_id}, Retrieval ID: {retrieval_id}")
-        print(f"  Modes: {num_modes}")
-        for mode in range(1, num_modes + 1):
-            resource_names = combos_by_mode.get(mode, [])
-            print(f"  - Mode {mode}:")
-            print(f"    Used Resources   : {resource_names}")
-            print(f"    Placement Demands: {demands_placement.get(mode, 'N/A')}")
-            print(f"    Work Demands     : {demands_work.get(mode, 'N/A')}")
-            print(f"    Retrieval Demands: {demands_retrieval.get(mode, 'N/A')}")
+        print(f"  Placement ID: {placement_id} ({num_placement_retrieval_modes} modes), Work ID: {work_id} ({num_work_modes} modes), Retrieval ID: {retrieval_id} ({num_placement_retrieval_modes} modes)")
+        
+        if combinations_for_task:
+            print("\n  === Placement Modes ===")
+            for mode, (combo, robot_idx) in pr_combos_by_mode.items():
+                robot_name = actual_robots[robot_idx]['name']
+                print(f"  - Mode {mode}:")
+                print(f"    Used Resources : {combo} + {robot_name}")
+                print(f"    Demands        : {demands_placement.get(mode, 'N/A')}")
+
+            print("\n  === Work Modes ===")
+            for mode, combo in w_combos_by_mode.items():
+                 print(f"  - Mode {mode}:")
+                 print(f"    Used Resources : {combo}")
+                 print(f"    Demands        : {demands_work.get(mode, 'N/A')}")
+            
+            print("\n  === Retrieval Modes ===")
+            for mode, (combo, robot_idx) in pr_combos_by_mode.items():
+                robot_name = actual_robots[robot_idx]['name']
+                print(f"  - Mode {mode}:")
+                print(f"    Used Resources : {combo} + {robot_name}")
+                print(f"    Demands        : {demands_retrieval.get(mode, 'N/A')}")
         print("-------------------------------------------\n")
 
     activities[3*N+1] = {'cost': 0, 'modes': 1, 'successors': [], 'demands': {1: [0] * total_resources}}
