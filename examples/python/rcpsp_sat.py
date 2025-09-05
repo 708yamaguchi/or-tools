@@ -24,6 +24,8 @@ Data use in flags:
 import collections
 import io
 import tempfile
+import json
+from itertools import combinations
 
 from absl import app
 from absl import flags
@@ -64,137 +66,204 @@ def get_task_ids(task_index):
     return placement_id, work_id, retrieval_id
 
 
+def calculate_all_task_combinations(input_data):
+    """
+    input_dataを受け取り、各タスクの要求を満たす「既約」な
+    リソースの組み合わせを全パターン計算して返します。(以前作成した関数)
+    """
+    def _find_irreducible_covers(required_caps, available_resources):
+        if not required_caps: return [[]]
+        all_valid_covers = []
+        for i in range(1, len(available_resources) + 1):
+            for combo in combinations(available_resources, i):
+                combined_caps = set(c for res in combo for c in res["capabilities"])
+                if required_caps.issubset(combined_caps):
+                    all_valid_covers.append(list(combo))
+        irreducible_solutions = []
+        for combo in all_valid_covers:
+            is_irreducible = True
+            if len(combo) > 1:
+                for sub_combo in combinations(combo, len(combo) - 1):
+                    sub_caps = set(c for res in sub_combo for c in res["capabilities"])
+                    if required_caps.issubset(sub_caps):
+                        is_irreducible = False; break
+            if is_irreducible:
+                solution_names = sorted([res["name"] for res in combo])
+                if solution_names not in irreducible_solutions:
+                    irreducible_solutions.append(solution_names)
+        return irreducible_solutions
+
+    all_resources = input_data["resources"]["renewable"] + input_data["resources"]["reservoir"]
+    all_task_combinations = {}
+    for task in input_data["tasks"]:
+        task_name, required_capabilities = task["name"], set(task["required_capabilities"])
+        combinations_for_task = _find_irreducible_covers(required_capabilities, all_resources)
+        all_task_combinations[task_name] = combinations_for_task
+    return all_task_combinations
+
+
 def generate_rcpsp_max_from_json(input_data):
     """
-    新しいJSONデータ形式から、RCPSP/max形式の文字列を生成します。
-
-    Args:
-        input_data (dict): プロジェクト情報を含むJSONオブジェクト。
-                           - resources.renewable[0].capacity: ロボットの台数
-                           - resources.reservoir[0].capacity: モジュールの数
-                           - tasks: タスクのリスト (name, duration)
-
-    Returns:
-        str: RCPSP/max形式にフォーマットされた文字列。
+    元のアルゴリズムを維持しつつ、作業アクティビティのモードを動的に生成します。
     """
     # --------------------------------------------------------------------------
-    # 1. データの解析と基本パラメータの設定
+    # 1. データの解析と基本パラメータの設定 (元のアルゴリズムを維持)
     # --------------------------------------------------------------------------
     tasks = input_data.get('tasks', [])
     N = len(tasks)
+    
+    # 各タスクの実行可能なリソース組み合わせを取得
+    task_combinations = calculate_all_task_combinations(input_data)
+    # # モジュール使用の判定用に、Reservoirリソースの名前セットを作成
+    # reservoir_names = {res['name'] for res in input_data['resources']['reservoir']}
 
-    # 再生可能リソース(Renewable)と貯蔵可能リソース(Reservoir)の総数を計算
-    num_renewable = 1 + N
-    num_reservoir = 1 + (2 * N)
+    # num_actual_robots = len(input_data['resources']['renewable'])
+    # num_renewable = num_actual_robots + N
+    # num_actual_modules = len(input_data['resources']['reservoir'])
+    # num_reservoir = num_actual_modules + (2 * N)
+    # total_resources = num_renewable + num_reservoir
+
+    actual_robots = input_data['resources']['renewable']
+    num_actual_robots = len(actual_robots)
+    num_renewable = num_actual_robots + N
+    robot_map = {res['name']: i for i, res in enumerate(actual_robots)}
+
+    actual_modules = input_data['resources']['reservoir']
+    num_actual_modules = len(actual_modules)
+    num_reservoir = num_actual_modules + (2 * N)
+    module_map = {res['name']: i for i, res in enumerate(actual_modules)}
+
+    total_resources = num_renewable + num_reservoir
 
     # --------------------------------------------------------------------------
-    # 2. アクティビティ情報の構築 (IDは0から開始)
+    # 2. アクティビティ情報の構築
     # --------------------------------------------------------------------------
     activities = {}
 
     # ダミーの開始アクティビティ (ID: 0)
-    start_successors = [id for n in range(1, N + 1) for id in get_task_ids(n)[:2]]
+    # ★修正箇所: 後続に全配置(3n-2)と全作業(3n-1)アクティビティを追加
+    start_successors = [id for n in range(1, N + 1) for id in (3 * n - 2, 3 * n - 1)]
     activities[0] = {
-        'cost': 0, 'modes': 1, 'successors': start_successors,
-        'demands': {1: [0] * (num_renewable + num_reservoir)}
+        'cost': 0, 'modes': 1, 'successors': sorted(start_successors),
+        'demands': {1: [0] * total_resources}
     }
 
-    # タスク関連のアクティビティ (ID: 1 から 3N まで)
+    # タスク関連のアクティビティ
     for n in range(1, N + 1):
         task_index = n - 1
-        task_duration = tasks[task_index]['duration']
-
-        # 各アクティビティのIDを定義
-        placement_id, work_id, retrieval_id = get_task_ids(n)
+        task = tasks[task_index]
+        task_duration = task['duration']
+        combinations_for_task = task_combinations[task['name']]
+        num_modes = len(combinations_for_task) if combinations_for_task else 1
+        
+        placement_id, work_id, retrieval_id = 3*n-2, 3*n-1, 3*n
         final_activity_id = 3 * N + 1
+        
+        demands_placement, demands_work, demands_retrieval = {}, {}, {}
 
-        # --- (3n-2): 配置アクティビティ ---
-        demands_placement = [0] * (num_renewable + num_reservoir)
-        demands_placement[0] = 1                              # Renewable 1
-        demands_placement[n] = 0                              # Renewable n+1
-        demands_placement[num_renewable] = 1                  # Reservoir 1
-        demands_placement[num_renewable + n] = 1              # Reservoir n+1
-        demands_placement[num_renewable + N + n] = 1          # Reservoir N+n+1
-        activities[placement_id] = {
-            'cost': 5, 'modes': 1, 'successors': [work_id],
-            'demands': {1: demands_placement}
-        }
+        # ★修正箇所: 配置・作業・回収のモードをcomboに依存させる
+        if not combinations_for_task: # 組み合わせがない場合
+            demands_placement[1] = [0] * total_resources
+            demands_work[1] = [0] * total_resources
+            demands_retrieval[1] = [0] * total_resources
+        else:
+            for i, combo in enumerate(combinations_for_task):
+                mode_num = i + 1
+                is_module_combo = any(res_name in module_map for res_name in combo)
+                
+                # --- 配置モードのデマンド ---
+                demands_p_mode = [0] * total_resources
+                for res_name in combo:
+                    if res_name in robot_map:
+                        demands_p_mode[robot_map[res_name]] = 1
+                    elif res_name in module_map:
+                        demands_p_mode[num_renewable + module_map[res_name]] = 1
+                if is_module_combo:
+                    demands_p_mode[num_renewable + num_actual_modules + (n - 1)] = 1
+                    demands_p_mode[num_renewable + num_actual_modules + N + (n - 1)] = 1
+                demands_placement[mode_num] = demands_p_mode
 
-        # --- (3n-1): 作業アクティビティ ---
-        # モード1のリソース消費
-        demands_work_m1 = [0] * (num_renewable + num_reservoir)
-        demands_work_m1[0] = 1                                # Renewable 1
-        demands_work_m1[n] = 1                                # Renewable n+1
+                # --- 作業モードのデマンド ---
+                demands_w_mode = [0] * total_resources
+                if is_module_combo:
+                    demands_w_mode[num_renewable + num_actual_modules + (n - 1)] = -1
+                else:
+                    robot_name = combo[0]
+                    demands_w_mode[robot_map[robot_name]] = 1
+                    demands_w_mode[num_actual_robots + (n - 1)] = 1
+                demands_work[mode_num] = demands_w_mode
 
-        # モード2のリソース消費
-        demands_work_m2 = [0] * (num_renewable + num_reservoir)
-        demands_work_m2[num_renewable + n] = -1               # Reservoir n+1 (返却)
+                # --- 回収モードのデマンド ---
+                demands_r_mode = [0] * total_resources
+                for res_name in combo:
+                    if res_name in robot_map:
+                        demands_r_mode[robot_map[res_name]] = 1
+                if is_module_combo:
+                    for res_name in combo:
+                        if res_name in module_map:
+                            demands_r_mode[num_renewable + module_map[res_name]] = -1
+                    demands_r_mode[num_renewable + num_actual_modules + N + (n - 1)] = -1
+                demands_retrieval[mode_num] = demands_r_mode
 
-        activities[work_id] = {
-            'cost': task_duration, 'modes': 2, 'successors': [retrieval_id, final_activity_id],
-            'demands': {1: demands_work_m1, 2: demands_work_m2}
-        }
+        activities[placement_id] = {'cost': 5, 'modes': num_modes, 'successors': [work_id], 'demands': demands_placement}
+        activities[work_id] = {'cost': task_duration, 'modes': num_modes, 'successors': [retrieval_id], 'demands': demands_work}
+        activities[retrieval_id] = {'cost': 5, 'modes': num_modes, 'successors': [final_activity_id], 'demands': demands_retrieval}
 
-        # --- (3n): 回収アクティビティ ---
-        demands_retrieval = [0] * (num_renewable + num_reservoir)
-        demands_retrieval[0] = 1                              # Renewable 1
-        demands_retrieval[num_renewable] = -1                 # Reservoir 1 (返却)
-        demands_retrieval[num_renewable + N + n] = -1         # Reservoir N+n+1 (返却)
-        activities[retrieval_id] = {
-            'cost': 5, 'modes': 1, 'successors': [final_activity_id],
-            'demands': {1: demands_retrieval}
-        }
+    activities[3*N+1] = {'cost': 0, 'modes': 1, 'successors': [], 'demands': {1: [0] * total_resources}}
 
-    # ダミーの終了アクティビティ (ID: 3N+1)
+    # ダミーの終了アクティビティ
     activities[3 * N + 1] = {
         'cost': 0, 'modes': 1, 'successors': [],
-        'demands': {1: [0] * (num_renewable + num_reservoir)}
+        'demands': {1: [0] * total_resources}
     }
-
+    
     # --------------------------------------------------------------------------
-    # 3. RCPSP/max 形式の文字列を生成
+    # 3. RCPSP/max 形式の文字列を生成 (元のロジックを極力維持)
     # --------------------------------------------------------------------------
     output_lines = []
+    output_lines.append(f"{3 * N} {num_renewable} {num_reservoir} 0") # ヘッダーのタスク数は3*N
 
-    # ヘッダー行
-    output_lines.append(f"{3 * N} {num_renewable} {num_reservoir} 0")
-
-    # 先行関係ブロック
+    # 先行関係ブロック (元の複雑な遅延ロジックを再現)
     for i in sorted(activities.keys()):
         act = activities[i]
         num_succ = len(act['successors'])
         line_parts = [str(i), str(act['modes']), str(num_succ)]
-
         if num_succ > 0:
             line_parts.append(' '.join(map(str, act['successors'])))
             delay_str_parts = []
             for succ_id in act['successors']:
+                # 後続がない場合はスキップ (終了アクティビティなど)
+                if succ_id not in activities: continue
                 succ_act = activities[succ_id]
                 num_delays = act['modes'] * succ_act['modes']
                 delays = [str(act['cost'])] * num_delays
                 delay_str_parts.append(f"[{' '.join(delays)}]")
             line_parts.append(' '.join(delay_str_parts))
-
         output_lines.append(' '.join(line_parts))
 
     # リソース消費ブロック
     for i in sorted(activities.keys()):
         act = activities[i]
-        for mode_num in sorted(act['demands'].keys()):
-            demands = ' '.join(map(str, act['demands'][mode_num]))
+        for mode_num, demands in sorted(act['demands'].items()):
+            demands_str = ' '.join(map(str, demands))
             if mode_num == 1:
-                output_lines.append(f"{i} {mode_num} {act['cost']} {demands}")
+                output_lines.append(f"{i} {mode_num} {act['cost']} {demands_str}")
             else:
-                output_lines.append(f" {mode_num} {act['cost']} {demands}")
+                output_lines.append(f" {mode_num} {act['cost']} {demands_str}")
 
     # リソース上限ブロック
-    robot_quantity = input_data['resources']['renewable'][0]['capacity']
-    module_quantity = input_data['resources']['reservoir'][0]['capacity']
+    # --- リソース上限ブロック (★ご指定の通りに修正) ---
+    # Renewable Resources: [実際のロボット数]個はjsonのcapacity, 最後のN個は1
+    robot_caps = [res['capacity'] for res in actual_robots]
+    task_lock_caps = [1] * N
+    renewable_caps = robot_caps + task_lock_caps
+    
+    # Reservoir Resources: [実際のモジュール数]個はjsonのcapacity, 最後の2N個は1
+    module_caps = [res['capacity'] for res in actual_modules]
+    module_lock_caps = [1] * (2 * N)
+    reservoir_caps = module_caps + module_lock_caps
 
-    renewable_caps = [robot_quantity] + [1] * N
-    reservoir_caps = [module_quantity] + [1] * (2 * N)
-    all_caps = renewable_caps + reservoir_caps
-    output_lines.append(' '.join(map(str, all_caps)))
+    output_lines.append(' '.join(map(str, renewable_caps + reservoir_caps)))
 
     return "\n".join(output_lines)
 
@@ -230,9 +299,7 @@ def create_name_mappings(input_data: dict) -> (dict, dict):
     return task_id_to_name, mode_to_name
 
 
-from typing import Dict, Tuple
-
-def create_resource_name_mappings(input_data: dict) -> (dict, dict):
+def create_resource_name_mappings(input_data):
     """
     入力データから、リソースIDをリソース名にマッピングする辞書を生成します。
 
@@ -1160,47 +1227,77 @@ def main(_):
     input_data = {
         "project_name": "TestTask",
         "resources": {
-            # 可変長だが、今は長さ1を想定
             "renewable": [
                 {
                     "name": "r8_robot",
-                    "capacity": 1
-                }
+                    "capacity": 1,
+                    "capabilities": ["arm", "camera", "gripper"]
+                },
+                {
+                    "name": "pr2_robot",
+                    "capacity": 1,
+                    "capabilities": ["camera", "arm"]
+                },
             ],
-            # 可変長で、将来的には複数モジュールが入ることを想定
             "reservoir": [
                 {
                     "name": "arm_module",
-                    "capacity": 3
+                    "capacity": 3,
+                    "capabilities": ["arm", "camera", "cleaner"]
+                },
+                {
+                    "name": "temperature_sensor_module",
+                    "capacity": 3,
+                    "capabilities": ["temperature_sensor"]
+                },
+                {
+                    "name": "camera_module",
+                    "capacity": 3,
+                    "capabilities": ["camera"]
+                },
+                {
+                    "name": "gripper_module",
+                    "capacity": 3,
+                    "capabilities": ["gripper"]
+                },
+                {
+                    "name": "cleaner_module",
+                    "capacity": 3,
+                    "capabilities": ["cleaner"]
                 }
             ]
         },
         "tasks": [
             {
                 "name": "kitchen",
-                "duration": 30
+                "duration": 30,
+                "required_capabilities": ["arm", "camera", "gripper"]
             },
             {
                 "name": "IH",
-                "duration": 20
+                "duration": 20,
+                "required_capabilities": ["arm", "camera", "temperature_sensor"]
             },
             {
                 "name": "faucet",
-                "duration": 25
+                "duration": 25,
+                "required_capabilities": ["arm", "gripper"]
             },
             {
                 "name": "fridge",
-                "duration": 15
+                "duration": 15,
+                "required_capabilities": ["arm", "gripper"]
             },
             {
                 "name": "wall",
-                "duration": 36
+                "duration": 36,
+                "required_capabilities": ["camera", "cleaner"]
             },
             {
                 "name": "table",
-                "duration": 15
+                "duration": 15,
+                "required_capabilities": ["gripper", "cleaner"]
             }
-
         ]
     }
 
