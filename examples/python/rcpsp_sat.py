@@ -104,7 +104,39 @@ def calculate_all_task_combinations(input_data):
 
 def generate_rcpsp_max_from_json(input_data):
     """
-    元のアルゴリズムを維持しつつ、作業アクティビティのモードを動的に生成します。
+    この関数は、JSON形式の入力データからRCPSP/max形式の文字列を生成します。
+    以下に、出力されるRCPSP/maxファイルのフォーマット仕様を記述します。
+
+    --- フォーマット仕様 ---
+
+    ■ ヘッダー行
+    <タスク数(3*N)> <Renewable Resourcesの数(num_actual_robots+N)> <Reservoir Resourcesの数(num_actual_modules+2*N)>
+
+    ■ 先行順序行
+    ・ダミーの開始アクティビティ (ID: 0)の後続には、全配置(3*n-2)と全作業(3*n-1)アクティビティが指定されます。
+    ・各タスクは「配置」「作業」「回収」の3つのアクティビティで構成され、以下の順序制約を持ちます。
+      配置アクティビティ -> 作業アクティビティ -> 回収アクティビティ
+
+    ■ Renewable Resourcesの定義
+    ・数: [実際のロボット数] + N
+    ・意味:
+      - 0 ~ (ロボット数-1)番目: 各種「空きロボット数」。ロボット使用時に消費されます。
+      - ロボット数 ~ (ロボット数+N-1)番目: 各「未実行タスク数」。ロボットによるタスク実行時に消費されます。
+
+    ■ Reservoir Resourcesの定義
+    ・数: [実際のモジュール数] + N * 2
+    ・意味:
+      - 0 ~ (モジュール数-1)番目: 各種「空きモジュール数」。モジュール使用時に消費、作業完了後に返却されます。
+      - モジュール数 ~ (モジュール数+N-1)番目: 「タスク用実行ロック」。配置で消費(-1), 作業で返却(+1)されます。
+      - (モジュール数+N) ~ (モジュール数+2N-1)番目: 「タスク用回収ロック」。配置で消費(-1), 回収で返却(+1)されます。
+
+    ■ 資源上限
+    ・Renewable Resources:
+      - 最初の[実際のロボット数]個: JSONの"renewable"のcapacity値
+      - 最後のN個: 1
+    ・Reservoir Resources:
+      - 最初の[実際のモジュール数]個: JSONの"reservoir"のcapacity値
+      - 最後の2N個: 1
     """
     # --------------------------------------------------------------------------
     # 1. データの解析と基本パラメータの設定 (元のアルゴリズムを維持)
@@ -114,14 +146,6 @@ def generate_rcpsp_max_from_json(input_data):
     
     # 各タスクの実行可能なリソース組み合わせを取得
     task_combinations = calculate_all_task_combinations(input_data)
-    # # モジュール使用の判定用に、Reservoirリソースの名前セットを作成
-    # reservoir_names = {res['name'] for res in input_data['resources']['reservoir']}
-
-    # num_actual_robots = len(input_data['resources']['renewable'])
-    # num_renewable = num_actual_robots + N
-    # num_actual_modules = len(input_data['resources']['reservoir'])
-    # num_reservoir = num_actual_modules + (2 * N)
-    # total_resources = num_renewable + num_reservoir
 
     actual_robots = input_data['resources']['renewable']
     num_actual_robots = len(actual_robots)
@@ -160,6 +184,7 @@ def generate_rcpsp_max_from_json(input_data):
         final_activity_id = 3 * N + 1
         
         demands_placement, demands_work, demands_retrieval = {}, {}, {}
+        combos_by_mode = {} # モードごとのリソース名を保存する辞書
 
         # ★修正箇所: 配置・作業・回収のモードをcomboに依存させる
         if not combinations_for_task: # 組み合わせがない場合
@@ -169,6 +194,7 @@ def generate_rcpsp_max_from_json(input_data):
         else:
             for i, combo in enumerate(combinations_for_task):
                 mode_num = i + 1
+                combos_by_mode[mode_num] = combo # 辞書に保存
                 is_module_combo = any(res_name in module_map for res_name in combo)
                 
                 # --- 配置モードのデマンド ---
@@ -209,6 +235,19 @@ def generate_rcpsp_max_from_json(input_data):
         activities[work_id] = {'cost': task_duration, 'modes': num_modes, 'successors': [retrieval_id], 'demands': demands_work}
         activities[retrieval_id] = {'cost': 5, 'modes': num_modes, 'successors': [final_activity_id], 'demands': demands_retrieval}
 
+        # デバッグ出力: タスク情報の整理
+        print(f"--- Task {n} ({task['name']}) -----------------")
+        print(f"  Placement ID: {placement_id}, Work ID: {work_id}, Retrieval ID: {retrieval_id}")
+        print(f"  Modes: {num_modes}")
+        for mode in range(1, num_modes + 1):
+            resource_names = combos_by_mode.get(mode, [])
+            print(f"  - Mode {mode}:")
+            print(f"    Used Resources   : {resource_names}")
+            print(f"    Placement Demands: {demands_placement.get(mode, 'N/A')}")
+            print(f"    Work Demands     : {demands_work.get(mode, 'N/A')}")
+            print(f"    Retrieval Demands: {demands_retrieval.get(mode, 'N/A')}")
+        print("-------------------------------------------\n")
+
     activities[3*N+1] = {'cost': 0, 'modes': 1, 'successors': [], 'demands': {1: [0] * total_resources}}
 
     # ダミーの終了アクティビティ
@@ -216,7 +255,7 @@ def generate_rcpsp_max_from_json(input_data):
         'cost': 0, 'modes': 1, 'successors': [],
         'demands': {1: [0] * total_resources}
     }
-    
+
     # --------------------------------------------------------------------------
     # 3. RCPSP/max 形式の文字列を生成 (元のロジックを極力維持)
     # --------------------------------------------------------------------------
