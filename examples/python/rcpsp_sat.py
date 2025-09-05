@@ -804,19 +804,20 @@ def _process_and_display_solution(
         mode_to_name=mode_to_name,
     )
 
-    # 4. リソース使用量を可視化
-    visualize_resource_usage(
-        solver=solver,
-        problem=problem,
-        executed_tasks=executed_tasks,
-        task_starts=task_starts,
-        task_ends=task_ends,
-        selected_recipes=selected_recipes,
-        task_resource_to_fixed_demands=task_resource_to_fixed_demands,
-        renewable_id_to_name=renewable_id_to_name,
-        reservoir_id_to_name=reservoir_id_to_name,
-        title=f"Resource Usage for '{project_name}'",
-    )
+    # 描画に時間がかかるので、普段はコメントアウト。デバッグ用に使う。
+    # # 4. リソース使用量を可視化
+    # visualize_resource_usage(
+    #     solver=solver,
+    #     problem=problem,
+    #     executed_tasks=executed_tasks,
+    #     task_starts=task_starts,
+    #     task_ends=task_ends,
+    #     selected_recipes=selected_recipes,
+    #     task_resource_to_fixed_demands=task_resource_to_fixed_demands,
+    #     renewable_id_to_name=renewable_id_to_name,
+    #     reservoir_id_to_name=reservoir_id_to_name,
+    #     title=f"Resource Usage for '{project_name}'",
+    # )
 
 
 def solve_rcpsp(
