@@ -220,6 +220,60 @@ def create_name_mappings(input_data: dict) -> (dict, dict):
     return task_id_to_name, mode_to_name
 
 
+from typing import Dict, Tuple
+
+def create_resource_name_mappings(input_data: dict) -> (dict, dict):
+    """
+    入力データから、リソースIDをリソース名にマッピングする辞書を生成します。
+
+    Args:
+        input_data (Dict): プロジェクトのデータが含まれる辞書。
+
+    Returns:
+        Tuple[Dict[int, str], Dict[int, str]]:
+            1. RenewableリソースのIDと名前のマッピング辞書。
+            2. ReservoirリソースのIDと名前のマッピング辞書。
+    """
+    tasks = input_data.get('tasks', [])
+    resources = input_data.get('resources', {})
+    N = len(tasks)
+
+    # resourcesセクションからの名前取得（存在しない場合に備える）
+    renewable_resources = resources.get('renewable', [])
+    robot_name = renewable_resources[0]['name'] if renewable_resources else "Unknown Robot"
+
+    reservoir_resources = resources.get('reservoir', [])
+    module_name = reservoir_resources[0]['name'] if reservoir_resources else "Unknown Module"
+
+    # 1. Renewable Resources のマッピング
+    renewable_id_to_name: Dict[int, str] = {}
+
+    # 0番目のリソース（ロボット）
+    renewable_id_to_name[0] = robot_name
+
+    # 1番目以降のリソース（タスクごとの作業場所）
+    for n in range(N):
+        task_name = tasks[n]['name']
+        resource_id = n + 1
+        renewable_id_to_name[resource_id] = f"{task_name} work place for {robot_name}"
+
+    # 2. Reservoir Resources のマッピング
+    reservoir_id_to_name: Dict[int, str] = {}
+
+    # 0番目のリソース（モジュール）
+    reservoir_id_to_name[0] = module_name
+
+    # 1番目以降のリソース（タスクごとのダミーリソース）
+    for n in range(N):
+        task_name = tasks[n]['name']
+        # 作業用ダミーリソース
+        reservoir_id_to_name[2 * n + 1] = f"dummy work resource for {task_name}"
+        # 回収用ダミーリソース
+        reservoir_id_to_name[2 * n + 2] = f"dummy collect resource for {task_name}"
+
+    return renewable_id_to_name, reservoir_id_to_name
+
+
 def calculate_optional_tasks(input_data):
     """
     新しいJSONデータ形式から、オプションタスクのインデックスセットを計算します。
@@ -536,6 +590,14 @@ def visualize_schedule(
     plt.show()
 
 
+import numpy as np
+import matplotlib.pyplot as plt
+from ortools.sat.python import cp_model
+# from ortools.scheduling.rcpsp import rcpsp_pb2 # 仮のインポート
+
+# ※ rcpsp_pb2はGoogle OR-Toolsのライブラリの一部です。
+# 実行には適切なインストールと設定が必要です。
+
 def visualize_resource_usage(
     solver: cp_model.CpSolver,
     problem: rcpsp_pb2.RcpspProblem,
@@ -544,10 +606,12 @@ def visualize_resource_usage(
     task_ends: dict,
     selected_recipes: dict,
     task_resource_to_fixed_demands: dict,
+    renewable_id_to_name: dict,
+    reservoir_id_to_name: dict,
     title: str = "Resource Usage Over Time",
 ) -> None:
     """
-    時間経過に伴うリソースの使用量を可視化する関数
+    時間経過に伴うリソースの使用量を可視化する関数（リソース名表示対応版）
     """
     makespan = int(solver.objective_value)
     time_points = np.arange(makespan + 2)  # 終了時点も含むため+2
@@ -556,7 +620,9 @@ def visualize_resource_usage(
     if num_resources == 0:
         return
 
-    # リソースごとにサブプロットを作成
+    # problem.resourcesリストがRenewable, Reservoirの順に並んでいることを前提とする
+    num_renewable_resources = sum(1 for r in problem.resources if r.renewable)
+
     fig, axes = plt.subplots(
         nrows=num_resources,
         ncols=1,
@@ -571,53 +637,46 @@ def visualize_resource_usage(
         resource = problem.resources[res_id]
         capacity = resource.max_capacity
 
-        # 無限キャパシティのリソースはスキップ
+        # リソース名の取得
+        resource_name = ""
+        if resource.renewable:
+            resource_name = renewable_id_to_name.get(res_id, f"Unknown Renewable {res_id}")
+        else:
+            # ReservoirのIDは、通し番号からRenewableリソースの数を引いて計算
+            reservoir_id = res_id - num_renewable_resources
+            resource_name = reservoir_id_to_name.get(reservoir_id, f"Unknown Reservoir {reservoir_id}")
+
         if capacity == -1:
-            ax.set_title(f"Resource {res_id} (Infinite Capacity)")
+            ax.set_title(f"{resource_name} (Infinite Capacity)")
             ax.set_yticks([])
             continue
 
         if resource.renewable:
-            # --- Renewable Resource の場合 (残量を表示) ---
+            # (Renewable Resourceの描画ロジックは変更なし)
             remaining_over_time = np.zeros_like(time_points, dtype=int)
-            for t in time_points[:-1]:  # 各時刻 t での残量を計算
+            for t in time_points[:-1]:
                 current_usage = 0
                 for task_id in executed_tasks:
                     start_time = solver.value(task_starts[task_id])
                     end_time = solver.value(task_ends[task_id])
                     if start_time <= t < end_time:
                         recipe = selected_recipes[task_id]
-                        demand = task_resource_to_fixed_demands[(task_id, res_id)][
-                            recipe
-                        ]
+                        demand = task_resource_to_fixed_demands[(task_id, res_id)][recipe]
                         current_usage += demand
-                # 使用量ではなく、総容量から引いた「残量」を格納
                 remaining_over_time[t] = capacity - current_usage
             remaining_over_time[-1] = remaining_over_time[-2]
 
-            # ステッププロットで残量を描画
-            ax.step(
-                time_points, remaining_over_time, where="post", label="Remaining Capacity",
-                linewidth=4
-            )
-            # 最大容量と最小容量（0）を線で示す
-            ax.axhline(
-                y=capacity, color="g", linestyle="--", label=f"Max Capacity ({capacity})",
-                linewidth=1
-            )
-            ax.axhline(
-                y=0, color="r", linestyle="--", label="Min Capacity (0)",
-                linewidth=1
-            )
+            ax.step(time_points, remaining_over_time, where="post", label="Remaining Capacity", linewidth=4)
+            ax.axhline(y=capacity, color="g", linestyle="--", label=f"Max Capacity ({capacity})", linewidth=1)
+            ax.axhline(y=0, color="r", linestyle="--", label="Min Capacity (0)", linewidth=1)
             ax.set_ylim(-1, max(1, capacity * 1.1))
-            ax.set_ylabel("Remaining Capacity") # Y軸ラベルを修正
-            ax.set_title(f"Renewable Resource {res_id}")
+            ax.set_ylabel("Remaining Capacity")
+            ax.set_title(f"Renewable: {resource_name}")
 
-        else:  # Reservoir Resource (Non-Renewable) の場合
-            # --- Reservoir Resource の場合 ---
+        else: # Reservoir Resource
+            # (Reservoir Resourceの描画ロジックは変更なし)
             level_over_time = np.zeros_like(time_points, dtype=int)
-            initial_level = capacity  # 初期レベルは最大容量と仮定
-
+            initial_level = capacity
             events = []
             for task_id in executed_tasks:
                 start_time = solver.value(task_starts[task_id])
@@ -636,24 +695,18 @@ def visualize_resource_usage(
                 level_over_time[t] = current_level
             level_over_time[-1] = level_over_time[-2]
 
-            ax.step(time_points, level_over_time, where="post", label="Remaining Level",
-                    linewidth=4)
-            min_capacity = 0
-            ax.axhline(
-                y=capacity, color="g", linestyle="--", label=f"Max Level ({capacity})",
-                linewidth=1)
-            ax.axhline(
-                y=min_capacity, color="r", linestyle="--", label=f"Min Level ({min_capacity})",
-                linewidth=1)
+            ax.step(time_points, level_over_time, where="post", label="Remaining Level", linewidth=4)
+            min_capacity = 0 # min_capacityの定義が必要
+            ax.axhline(y=capacity, color="g", linestyle="--", label=f"Max Level ({capacity})", linewidth=1)
+            ax.axhline(y=min_capacity, color="r", linestyle="--", label=f"Min Level ({min_capacity})", linewidth=1)
             ax.set_ylim(min(0, min_capacity) - 1, max(1, capacity * 1.1))
             ax.set_ylabel("Level")
-            ax.set_title(f"Reservoir Resource {res_id}")
+            ax.set_title(f"Reservoir: {resource_name}")
 
         ax.grid(True, which="major", linestyle="--", linewidth=0.5)
         ax.legend()
         ax.tick_params(labelbottom=True)
 
-    # X軸の設定
     plt.xlabel("Time")
     plt.xlim(0, makespan)
     plt.xticks(range(makespan + 1))
@@ -677,6 +730,8 @@ def _process_and_display_solution(
     project_name: str,
     task_id_to_name: dict,
     mode_to_name: dict,
+    renewable_id_to_name: dict,
+    reservoir_id_to_name: dict,
 ) -> None:
     """ソルバーの実行結果を処理し、コンソールとグラフで表示する"""
     # 実際に実行されたタスクのリストを作成する
@@ -759,6 +814,8 @@ def _process_and_display_solution(
         task_ends=task_ends,
         selected_recipes=selected_recipes,
         task_resource_to_fixed_demands=task_resource_to_fixed_demands,
+        renewable_id_to_name=renewable_id_to_name,
+        reservoir_id_to_name=reservoir_id_to_name,
         title=f"Resource Usage for '{project_name}'",
     )
 
@@ -1159,6 +1216,7 @@ def main(_):
 
     # 1.5 マッピング辞書を生成
     task_id_to_name, mode_to_name = create_name_mappings(input_data)
+    renewable_id_to_name, reservoir_id_to_name = create_resource_name_mappings(input_data)
 
     # 2. Generate RCPSP/max format string from JSON
     rcpsp_data_string = generate_rcpsp_max_from_json(input_data)
@@ -1194,6 +1252,8 @@ def main(_):
             project_name=input_data["project_name"],
             task_id_to_name=task_id_to_name,
             mode_to_name=mode_to_name,
+            renewable_id_to_name=renewable_id_to_name,
+            reservoir_id_to_name=reservoir_id_to_name,
             **results,
         )
     elif status == cp_model.INFEASIBLE:
