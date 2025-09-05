@@ -51,6 +51,19 @@ _USE_INTERVAL_MAKESPAN = flags.DEFINE_bool(
 _HORIZON = flags.DEFINE_integer("horizon", -1, "Force horizon.")
 
 
+# --- Helper Functions for Task ID Calculation ---
+# int -> Tuple[int, int, int]
+def get_task_ids(task_index):
+    """
+    Calculates the IDs for placement, work, and retrieval activities for a given task index.
+    The task_index is 1-based.
+    """
+    placement_id = 3 * task_index - 2
+    work_id = 3 * task_index - 1
+    retrieval_id = 3 * task_index
+    return placement_id, work_id, retrieval_id
+
+
 def generate_rcpsp_max_from_json(input_data):
     """
     新しいJSONデータ形式から、RCPSP/max形式の文字列を生成します。
@@ -80,7 +93,7 @@ def generate_rcpsp_max_from_json(input_data):
     activities = {}
 
     # ダミーの開始アクティビティ (ID: 0)
-    start_successors = [id for n in range(1, N + 1) for id in (3 * n - 2, 3 * n - 1)]
+    start_successors = [id for n in range(1, N + 1) for id in get_task_ids(n)[:2]]
     activities[0] = {
         'cost': 0, 'modes': 1, 'successors': start_successors,
         'demands': {1: [0] * (num_renewable + num_reservoir)}
@@ -92,9 +105,7 @@ def generate_rcpsp_max_from_json(input_data):
         task_duration = tasks[task_index]['duration']
 
         # 各アクティビティのIDを定義
-        placement_id = 3 * n - 2
-        work_id = 3 * n - 1
-        retrieval_id = 3 * n
+        placement_id, work_id, retrieval_id = get_task_ids(n)
         final_activity_id = 3 * N + 1
 
         # --- (3n-2): 配置アクティビティ ---
@@ -204,9 +215,7 @@ def create_name_mappings(input_data: dict) -> (dict, dict):
     # JSONのtasksに基づくタスク
     for n in range(1, N + 1):
         task_name = tasks[n - 1]['name']
-        placement_id = 3 * n - 2
-        work_id = 3 * n - 1
-        retrieval_id = 3 * n
+        placement_id, work_id, retrieval_id = get_task_ids(n)
 
         task_id_to_name[placement_id] = f"Pre-{task_name}"
         task_id_to_name[work_id] = f"{task_name}"
@@ -275,16 +284,14 @@ def create_resource_name_mappings(input_data: dict) -> (dict, dict):
     return renewable_id_to_name, reservoir_id_to_name
 
 
-def calculate_optional_tasks(input_data):
-    """
-    新しいJSONデータ形式から、オプションタスクのインデックスセットを計算します。
-    """
-    tasks_data = input_data.get('tasks', [])
-    N = len(tasks_data)
+def calculate_optional_tasks(input_data):  # Dict -> Set[int]
+    """Determines the set of optional task IDs (placement and retrieval)."""
+    tasks = input_data.get('tasks', [])
     optional_tasks = set()
-    for n in range(1, N + 1):
-        optional_tasks.add(3 * n - 2) # 配置タスク
-        optional_tasks.add(3 * n)     # 回収タスク
+    for n in range(1, len(tasks) + 1):
+        placement_id, _, retrieval_id = get_task_ids(n)
+        optional_tasks.add(placement_id)
+        optional_tasks.add(retrieval_id)
     return optional_tasks
 
 
