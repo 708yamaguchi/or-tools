@@ -266,7 +266,7 @@ def generate_rcpsp_max_from_json(input_data):
             for mode, (combo, robot_idx) in pr_combos_by_mode.items():
                 robot_name = actual_robots[robot_idx]['name']
                 print(f"  - Mode {mode}:")
-                print(f"    Used Resources : {combo} + {robot_name}")
+                print(f"    Used Resources : {combo} + {robot_name} (Place)")
                 print(f"    Demands        : {demands_placement.get(mode, 'N/A')}")
 
             print("\n  === Work Modes ===")
@@ -279,7 +279,7 @@ def generate_rcpsp_max_from_json(input_data):
             for mode, (combo, robot_idx) in pr_combos_by_mode.items():
                 robot_name = actual_robots[robot_idx]['name']
                 print(f"  - Mode {mode}:")
-                print(f"    Used Resources : {combo} + {robot_name}")
+                print(f"    Used Resources : {combo} + {robot_name} (Retrieval)")
                 print(f"    Demands        : {demands_retrieval.get(mode, 'N/A')}")
         print("-------------------------------------------\n")
 
