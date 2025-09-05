@@ -34,6 +34,7 @@ from ortools.scheduling import rcpsp_pb2
 from ortools.scheduling.python import rcpsp
 
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 import matplotlib.cm as cm
 import numpy as np
 
@@ -590,14 +591,6 @@ def visualize_schedule(
     plt.show()
 
 
-import numpy as np
-import matplotlib.pyplot as plt
-from ortools.sat.python import cp_model
-# from ortools.scheduling.rcpsp import rcpsp_pb2 # 仮のインポート
-
-# ※ rcpsp_pb2はGoogle OR-Toolsのライブラリの一部です。
-# 実行には適切なインストールと設定が必要です。
-
 def visualize_resource_usage(
     solver: cp_model.CpSolver,
     problem: rcpsp_pb2.RcpspProblem,
@@ -611,17 +604,21 @@ def visualize_resource_usage(
     title: str = "Resource Usage Over Time",
 ) -> None:
     """
-    時間経過に伴うリソースの使用量を可視化する関数（リソース名表示対応版）
+    時間経過に伴うリソースの使用量を可視化する関数
+    - 軸の目盛りを整数に修正
+    - 描画ロジックを高速化
     """
     makespan = int(solver.objective_value)
-    time_points = np.arange(makespan + 2)  # 終了時点も含むため+2
+    time_points = np.arange(makespan + 2)
     num_resources = len(problem.resources)
 
     if num_resources == 0:
         return
 
-    # problem.resourcesリストがRenewable, Reservoirの順に並んでいることを前提とする
     num_renewable_resources = sum(1 for r in problem.resources if r.renewable)
+
+    task_start_values = {task_id: solver.value(task_starts[task_id]) for task_id in executed_tasks}
+    task_end_values = {task_id: solver.value(task_ends[task_id]) for task_id in executed_tasks}
 
     fig, axes = plt.subplots(
         nrows=num_resources,
@@ -630,19 +627,17 @@ def visualize_resource_usage(
         sharex=True,
         squeeze=False,
     )
-    axes = axes.flatten()  # 常に2D配列として扱う
+    axes = axes.flatten()
     fig.suptitle(title, fontsize=16)
 
     for res_id, ax in enumerate(axes):
         resource = problem.resources[res_id]
         capacity = resource.max_capacity
 
-        # リソース名の取得
         resource_name = ""
         if resource.renewable:
             resource_name = renewable_id_to_name.get(res_id, f"Unknown Renewable {res_id}")
         else:
-            # ReservoirのIDは、通し番号からRenewableリソースの数を引いて計算
             reservoir_id = res_id - num_renewable_resources
             resource_name = reservoir_id_to_name.get(reservoir_id, f"Unknown Reservoir {reservoir_id}")
 
@@ -652,19 +647,25 @@ def visualize_resource_usage(
             continue
 
         if resource.renewable:
-            # (Renewable Resourceの描画ロジックは変更なし)
-            remaining_over_time = np.zeros_like(time_points, dtype=int)
-            for t in time_points[:-1]:
-                current_usage = 0
-                for task_id in executed_tasks:
-                    start_time = solver.value(task_starts[task_id])
-                    end_time = solver.value(task_ends[task_id])
-                    if start_time <= t < end_time:
-                        recipe = selected_recipes[task_id]
-                        demand = task_resource_to_fixed_demands[(task_id, res_id)][recipe]
-                        current_usage += demand
-                remaining_over_time[t] = capacity - current_usage
-            remaining_over_time[-1] = remaining_over_time[-2]
+            usage_changes = np.zeros(makespan + 2, dtype=int)
+            for task_id in executed_tasks:
+                start_time = task_start_values[task_id]
+                end_time = task_end_values[task_id]
+                recipe = selected_recipes[task_id]
+
+                demand_list = task_resource_to_fixed_demands.get((task_id, res_id))
+                demand = 0
+                # demand_listが存在し、recipeが有効なインデックスか確認
+                if demand_list and 0 <= recipe < len(demand_list):
+                    demand = demand_list[recipe]
+
+                if demand != 0:
+                    usage_changes[start_time] += demand
+                    if end_time < len(usage_changes):
+                        usage_changes[end_time] -= demand
+
+            usage_over_time = np.cumsum(usage_changes)
+            remaining_over_time = capacity - usage_over_time
 
             ax.step(time_points, remaining_over_time, where="post", label="Remaining Capacity", linewidth=4)
             ax.axhline(y=capacity, color="g", linestyle="--", label=f"Max Capacity ({capacity})", linewidth=1)
@@ -674,29 +675,25 @@ def visualize_resource_usage(
             ax.set_title(f"Renewable: {resource_name}")
 
         else: # Reservoir Resource
-            # (Reservoir Resourceの描画ロジックは変更なし)
-            level_over_time = np.zeros_like(time_points, dtype=int)
+            level_changes = np.zeros(makespan + 2, dtype=int)
             initial_level = capacity
-            events = []
             for task_id in executed_tasks:
-                start_time = solver.value(task_starts[task_id])
+                start_time = task_start_values[task_id]
                 recipe = selected_recipes[task_id]
-                demand = task_resource_to_fixed_demands[(task_id, res_id)][recipe]
-                if demand != 0:
-                    events.append((start_time, demand))
-            events.sort()
 
-            current_level = initial_level
-            event_idx = 0
-            for t in time_points[:-1]:
-                while event_idx < len(events) and events[event_idx][0] == t:
-                    current_level -= events[event_idx][1]
-                    event_idx += 1
-                level_over_time[t] = current_level
-            level_over_time[-1] = level_over_time[-2]
+                demand_list = task_resource_to_fixed_demands.get((task_id, res_id))
+                demand = 0
+                # demand_listが存在し、recipeが有効なインデックスか確認
+                if demand_list and 0 <= recipe < len(demand_list):
+                    demand = demand_list[recipe]
+
+                if demand != 0:
+                    level_changes[start_time] -= demand
+
+            level_over_time = initial_level + np.cumsum(level_changes)
 
             ax.step(time_points, level_over_time, where="post", label="Remaining Level", linewidth=4)
-            min_capacity = 0 # min_capacityの定義が必要
+            min_capacity = 0
             ax.axhline(y=capacity, color="g", linestyle="--", label=f"Max Level ({capacity})", linewidth=1)
             ax.axhline(y=min_capacity, color="r", linestyle="--", label=f"Min Level ({min_capacity})", linewidth=1)
             ax.set_ylim(min(0, min_capacity) - 1, max(1, capacity * 1.1))
@@ -707,9 +704,11 @@ def visualize_resource_usage(
         ax.legend()
         ax.tick_params(labelbottom=True)
 
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+
     plt.xlabel("Time")
     plt.xlim(0, makespan)
-    plt.xticks(range(makespan + 1))
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     plt.show()
 
@@ -1174,7 +1173,7 @@ def main(_):
             "renewable": [
                 {
                     "name": "r8_robot",
-                    "capacity": 1
+                    "capacity": 3
                 }
             ],
             # 可変長で、将来的には複数モジュールが入ることを想定
@@ -1190,18 +1189,18 @@ def main(_):
                 "name": "kitchen",
                 "duration": 30
             },
-            # {
-            #     "name": "IH",
-            #     "duration": 20
-            # },
-            # {
-            #     "name": "faucet",
-            #     "duration": 25
-            # },
-            # {
-            #     "name": "fridge",
-            #     "duration": 15
-            # },
+            {
+                "name": "IH",
+                "duration": 20
+            },
+            {
+                "name": "faucet",
+                "duration": 25
+            },
+            {
+                "name": "fridge",
+                "duration": 15
+            },
             {
                 "name": "wall",
                 "duration": 36
