@@ -326,7 +326,7 @@ def generate_rcpsp_max_from_json(input_data):
                 output_lines.append(f" {mode_num} {act['cost']} {demands_str}")
 
     # リソース上限ブロック
-    # --- リソース上限ブロック (★ご指定の通りに修正) ---
+    # --- リソース上限ブロック---
     # Renewable Resources: [実際のロボット数]個はjsonのcapacity, 最後のN個は1
     robot_caps = [res['capacity'] for res in actual_robots]
     task_lock_caps = [1] * N
@@ -365,17 +365,20 @@ def create_name_mappings(input_data: dict) -> (dict, dict):
         task_id_to_name[retrieval_id] = f"Post-{task_name}"
 
     # モードのマッピング
-    mode_to_name = {
-        1: "by robot",
-        2: "by module",
-    }
+    # mode_to_name = {
+    #     1: "by robot",
+    #     2: "by module",
+    # }
+    mode_to_name = {}
+    for i in range(100):
+        mode_to_name[i] = f"Mode {i}"
 
     return task_id_to_name, mode_to_name
 
 
 def create_resource_name_mappings(input_data):
     """
-    入力データから、リソースIDをリソース名にマッピングする辞書を生成します。
+    入力データと定義に基づき、リソースIDをリソース名にマッピングする辞書を生成します。
 
     Args:
         input_data (Dict): プロジェクトのデータが含まれる辞書。
@@ -389,38 +392,43 @@ def create_resource_name_mappings(input_data):
     resources = input_data.get('resources', {})
     N = len(tasks)
 
-    # resourcesセクションからの名前取得（存在しない場合に備える）
     renewable_resources = resources.get('renewable', [])
-    robot_name = renewable_resources[0]['name'] if renewable_resources else "Unknown Robot"
+    num_actual_robots = len(renewable_resources)
 
     reservoir_resources = resources.get('reservoir', [])
-    module_name = reservoir_resources[0]['name'] if reservoir_resources else "Unknown Module"
+    num_actual_modules = len(reservoir_resources)
 
     # 1. Renewable Resources のマッピング
     renewable_id_to_name: Dict[int, str] = {}
 
-    # 0番目のリソース（ロボット）
-    renewable_id_to_name[0] = robot_name
+    # - 0 ~ (ロボット数-1)番目: 各種「空きロボット数」
+    for i in range(num_actual_robots):
+        renewable_id_to_name[i] = renewable_resources[i].get('name', f"Robot_{i+1}")
 
-    # 1番目以降のリソース（タスクごとの作業場所）
+    # - ロボット数 ~ (ロボット数+N-1)番目: 各「未実行タスク数」
     for n in range(N):
         task_name = tasks[n]['name']
-        resource_id = n + 1
-        renewable_id_to_name[resource_id] = f"{task_name} work place for {robot_name}"
+        resource_id = num_actual_robots + n
+        renewable_id_to_name[resource_id] = f"Task Lock for '{task_name}'"
 
     # 2. Reservoir Resources のマッピング
     reservoir_id_to_name: Dict[int, str] = {}
 
-    # 0番目のリソース（モジュール）
-    reservoir_id_to_name[0] = module_name
+    # - 0 ~ (モジュール数-1)番目: 各種「空きモジュール数」
+    for i in range(num_actual_modules):
+        reservoir_id_to_name[i] = reservoir_resources[i].get('name', f"Module_{i+1}")
 
-    # 1番目以降のリソース（タスクごとのダミーリソース）
+    # - モジュール数 ~ (モジュール数+N-1)番目: 「タスク用実行ロック」
     for n in range(N):
         task_name = tasks[n]['name']
-        # 作業用ダミーリソース
-        reservoir_id_to_name[2 * n + 1] = f"dummy work resource for {task_name}"
-        # 回収用ダミーリソース
-        reservoir_id_to_name[2 * n + 2] = f"dummy collect resource for {task_name}"
+        resource_id = num_actual_modules + n
+        reservoir_id_to_name[resource_id] = f"Execution Lock for '{task_name}'"
+
+    # - (モジュール数+N) ~ (モジュール数+2N-1)番目: 「タスク用回収ロック」
+    for n in range(N):
+        task_name = tasks[n]['name']
+        resource_id = num_actual_modules + N + n
+        reservoir_id_to_name[resource_id] = f"Retrieval Lock for '{task_name}'"
 
     return renewable_id_to_name, reservoir_id_to_name
 
@@ -617,6 +625,16 @@ def print_schedule_by_time_step(
                             task_to_resource_demands[task_id][res_id]
                         )
                 remaining_capacity = total_capacity - used_capacity
+                if (
+                    remaining_capacity < 0
+                    or used_capacity < 0
+                    or remaining_capacity > total_capacity
+                    or used_capacity > total_capacity
+                ):
+                    raise ValueError(
+                        "Renewable resource must be in [min, max] at any time."
+                    )
+
                 print(
                     f"    - (Renewable)   Resource {res_id}:"
                     f" Remaining={remaining_capacity}/{total_capacity}".ljust(46),
@@ -780,19 +798,22 @@ def visualize_resource_usage(
     solver, problem, executed_tasks, task_starts, task_ends,
     selected_recipes, task_resource_to_fixed_demands,
     renewable_id_to_name, reservoir_id_to_name,
-    title="Resource Usage Over Time", main_resource_only=False
+    title="Resource Usage Over Time", main_resource_only=False,
+    num_actual_robots=0, num_actual_modules=0    
 ):
     """時間経過に伴うリソースの使用量を可視化します。"""
     makespan = int(solver.objective_value)
 
     if main_resource_only:
         resources_to_plot = []
-        try:
-            resources_to_plot.append(next(i for i, r in enumerate(problem.resources) if r.renewable))
-        except StopIteration: pass
-        try:
-            resources_to_plot.append(next(i for i, r in enumerate(problem.resources) if not r.renewable))
-        except StopIteration: pass
+        # 1. 実際のロボット（Renewable）をプロット対象に追加
+        resources_to_plot.extend(list(range(num_actual_robots)))
+
+        # 2. 実際のモジュール（Reservoir）をプロット対象に追加
+        #    Reservoirリソースの開始インデックスを計算するために、全Renewableリソース数を数える
+        num_total_renewable = sum(1 for r in problem.resources if r.renewable)
+        module_ids = list(range(num_total_renewable, num_total_renewable + num_actual_modules))
+        resources_to_plot.extend(module_ids)
     else:
         resources_to_plot = list(range(len(problem.resources)))
 
@@ -830,21 +851,24 @@ def visualize_schedule_and_main_resources(
     all_active_tasks, executed_tasks, task_starts,
     task_ends, task_durations, selected_recipes,
     task_resource_to_fixed_demands, task_id_to_name,
-    mode_to_name, renewable_id_to_name, reservoir_id_to_name, title
+    mode_to_name, renewable_id_to_name, reservoir_id_to_name, title,
+    num_actual_robots, num_actual_modules    
 ):
     """Visualizes the Gantt chart and main resource usage in a single figure."""
     makespan = int(solver.objective_value)
 
     # 描画対象とする主要リソースのIDを探し、リストに格納
     main_resources_to_plot = []
-    try:
-        # 1. 最初の「再生可能リソース」を探し、描画対象として追加。二番目以降は追加しない。
-        main_resources_to_plot.append(next(i for i, r in enumerate(problem.resources) if r.renewable))
-    except StopIteration: pass
-    try:
-        # 2. 最初の「貯蔵可能リソース」を探し、描画対象として追加。二番目以降は追加しない。
-        main_resources_to_plot.append(next(i for i, r in enumerate(problem.resources) if not r.renewable))
-    except StopIteration: pass
+    # 1. 実際のロボット（Renewable）を追加
+    #    Renewableリソースはインデックス0から始まる
+    robot_ids = list(range(num_actual_robots))
+    main_resources_to_plot.extend(robot_ids)
+
+    # 2. 実際のモジュール（Reservoir）を追加
+    #    Reservoirリソースの開始インデックスを計算
+    num_total_renewable = sum(1 for r in problem.resources if r.renewable)
+    module_ids = list(range(num_total_renewable, num_total_renewable + num_actual_modules))
+    main_resources_to_plot.extend(module_ids)
 
     num_plots = 1 + len(main_resources_to_plot)
     tasks_to_display_ids = sorted([t for t in task_id_to_name if t in all_active_tasks or t in {0, len(task_id_to_name) - 1}])
@@ -888,7 +912,8 @@ def _process_and_display_solution(
     task_to_presence_literals, task_to_resource_demands,
     task_resource_to_fixed_demands, project_name,
     task_id_to_name, mode_to_name, renewable_id_to_name,
-    reservoir_id_to_name
+    reservoir_id_to_name,
+    num_actual_robots, num_actual_modules    
 ):
     """Processes and displays the solution from the solver."""
     # Identify which tasks were actually executed
@@ -939,6 +964,9 @@ def _process_and_display_solution(
     #     selected_recipes, task_resource_to_fixed_demands,
     #     renewable_id_to_name, reservoir_id_to_name,
     #     title=f"Resource Usage for '{project_name}'"
+    #     main_resource_only=True,
+    #     num_actual_robots=num_actual_robots,
+    #     num_actual_modules=num_actual_modules
     # )
 
     # 3. Combined Gantt and Main Resource Chart
@@ -947,7 +975,9 @@ def _process_and_display_solution(
         task_starts, task_ends, task_durations, selected_recipes,
         task_resource_to_fixed_demands, task_id_to_name, mode_to_name,
         renewable_id_to_name, reservoir_id_to_name,
-        title=f"Task Schedule and Resource Usage for '{project_name}'"
+        title=f"Task Schedule and Resource Usage for '{project_name}'",
+        num_actual_robots=num_actual_robots,
+        num_actual_modules=num_actual_modules
     )
 
 
@@ -1375,6 +1405,10 @@ def main(_):
         ]
     }
 
+    # 実際のロボットとモジュールの数を取得
+    num_actual_robots = len(input_data["resources"]["renewable"])
+    num_actual_modules = len(input_data["resources"]["reservoir"])
+
     # 1.5 マッピング辞書を生成
     task_id_to_name, mode_to_name = create_name_mappings(input_data)
     renewable_id_to_name, reservoir_id_to_name = create_resource_name_mappings(input_data)
@@ -1415,11 +1449,12 @@ def main(_):
             mode_to_name=mode_to_name,
             renewable_id_to_name=renewable_id_to_name,
             reservoir_id_to_name=reservoir_id_to_name,
+            num_actual_robots=num_actual_robots,
+            num_actual_modules=num_actual_modules,
             **results,
         )
     elif status == cp_model.INFEASIBLE:
         print("No solution found.")
-
 
 
 if __name__ == "__main__":
