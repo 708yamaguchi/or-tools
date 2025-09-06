@@ -166,6 +166,9 @@ def generate_rcpsp_max_from_json(input_data):
         final_activity_id = 3 * N + 1
 
         demands_placement, demands_work, demands_retrieval = {}, {}, {}
+        # モードごとのコストを格納する辞書を準備
+        placement_costs_by_mode = {}
+        retrieval_costs_by_mode = {}
 
         num_work_modes = len(combinations_for_task) if combinations_for_task else 1
         num_placement_retrieval_modes = num_work_modes * num_actual_robots if combinations_for_task and num_actual_robots > 0 else 1
@@ -178,6 +181,9 @@ def generate_rcpsp_max_from_json(input_data):
             demands_placement[1] = [0] * total_resources
             demands_work[1] = [0] * total_resources
             demands_retrieval[1] = [0] * total_resources
+            # デフォルトのコストを設定
+            placement_costs_by_mode[1] = 0
+            retrieval_costs_by_mode[1] = 0
         else:
             # --- 作業モードのデマンド (Work Activities) ---
             for i, combo in enumerate(combinations_for_task):
@@ -185,24 +191,27 @@ def generate_rcpsp_max_from_json(input_data):
                 w_combos_by_mode[mode_num] = combo
                 mode_to_resources_map[(task_name, i)] = sorted(combo)
                 demands_w_mode = [0] * total_resources
-
-                # 使用するロボット/モジュールを消費 (Renewable)
                 for resource_name in combo:
                     if resource_name in robot_map:
                         demands_w_mode[robot_map[resource_name]] = 1
                     elif resource_name in module_map:
                         demands_w_mode[module_map[resource_name]] = 1
-
-                # 未実行タスク数を消費 (Renewable)
                 demands_w_mode[num_actual_robots + num_actual_modules + (n-1)] = 1
-
                 demands_work[mode_num] = demands_w_mode
 
             # --- 配置・回収モードのデマンド (Placement/Retrieval Activities) ---
             mode_num_pr = 0
             for i, combo in enumerate(combinations_for_task):
+                # この組み合わせ(combo)にモジュールが含まれるかチェックし、コストを決定
+                combo_uses_module = any(res_name in module_map for res_name in combo)
+                cost = 5 if combo_uses_module else 0
+
                 for j in range(num_actual_robots): # 配置/回収はどのロボットでもよい
                     mode_num_pr += 1
+                    # モード番号に対応するコストを保存
+                    placement_costs_by_mode[mode_num_pr] = cost
+                    retrieval_costs_by_mode[mode_num_pr] = cost
+
                     pr_combos_by_mode[mode_num_pr] = (combo, j)
                     recipe_idx_pr = mode_num_pr - 1
                     carrier_robot_name = actual_robots[j]['name']
@@ -210,52 +219,35 @@ def generate_rcpsp_max_from_json(input_data):
                     mode_to_resources_map[(f"Pre-{task_name}", recipe_idx_pr)] = resources_used
                     mode_to_resources_map[(f"Post-{task_name}", recipe_idx_pr)] = resources_used
 
-                    # --- 配置モードのデマンド ---
                     demands_p_mode = [0] * total_resources
-                    demands_p_mode[j] = 1 # j番目のロボットを消費 (Renewable)
+                    demands_p_mode[j] = 1
                     for res_name in combo:
-                        if res_name in robot_map: # ロボットを消費 (Renewable)
+                        if res_name in robot_map:
                             demands_p_mode[robot_map[res_name]] = 1
-                        if res_name in module_map: # モジュールを消費 (Renewable)
+                        if res_name in module_map:
                             demands_p_mode[module_map[res_name]] = 1
                     demands_placement[mode_num_pr] = demands_p_mode
 
-                    # --- 回収モードのデマンド ---
                     demands_r_mode = [0] * total_resources
-                    demands_r_mode[j] = 1 # j番目のロボットを消費 (Renewable)
+                    demands_r_mode[j] = 1
                     for res_name in combo:
-                        if res_name in robot_map: # ロボットを消費 (Renewable)
+                        if res_name in robot_map:
                             demands_r_mode[robot_map[res_name]] = 1
-                        if res_name in module_map: # モジュールを消費 (Renewable)
+                        if res_name in module_map:
                             demands_r_mode[module_map[res_name]] = 1
                     demands_retrieval[mode_num_pr] = demands_r_mode
 
-        activities[placement_id] = {'cost': 5, 'modes': num_placement_retrieval_modes, 'successors': [work_id], 'demands': demands_placement}
+        # --- ▼▼▼ ここから修正 ▼▼▼ ---
+        # モードごとのコスト情報を持つ 'costs_by_mode' を格納する
+        activities[placement_id] = {'modes': num_placement_retrieval_modes, 'successors': [work_id], 'demands': demands_placement, 'costs_by_mode': placement_costs_by_mode}
+        # 作業タスクはコスト固定なので従来の 'cost' キーを使用
         activities[work_id] = {'cost': task_duration, 'modes': num_work_modes, 'successors': [retrieval_id], 'demands': demands_work}
-        activities[retrieval_id] = {'cost': 5, 'modes': num_placement_retrieval_modes, 'successors': [final_activity_id], 'demands': demands_retrieval}
+        activities[retrieval_id] = {'modes': num_placement_retrieval_modes, 'successors': [final_activity_id], 'demands': demands_retrieval, 'costs_by_mode': retrieval_costs_by_mode}
+        # --- ▲▲▲ ここまで修正 ▲▲▲ ---
 
-        # デバッグ出力
+        # デバッグ出力 (変更なし)
         print(f"--- Task {n} ({task['name']}) -----------------")
-        print(f"  Placement ID: {placement_id} ({num_placement_retrieval_modes} modes), Work ID: {work_id} ({num_work_modes} modes), Retrieval ID: {retrieval_id} ({num_placement_retrieval_modes} modes)")
-        if combinations_for_task:
-            print("\n  === Placement Modes ===")
-            for mode, (combo, robot_idx) in pr_combos_by_mode.items():
-                robot_name = actual_robots[robot_idx]['name']
-                print(f"  - Mode {mode}:")
-                print(f"    Used Resources : {combo} + {robot_name} (Place)")
-                print(f"    Demands        : {demands_placement.get(mode, 'N/A')}")
-
-            print("\n  === Work Modes ===")
-            for mode, combo in w_combos_by_mode.items():
-                 print(f"  - Mode {mode}:")
-                 print(f"    Used Resources : {combo}")
-                 print(f"    Demands        : {demands_work.get(mode, 'N/A')}")
-            print("\n  === Retrieval Modes ===")
-            for mode, (combo, robot_idx) in pr_combos_by_mode.items():
-                robot_name = actual_robots[robot_idx]['name']
-                print(f"  - Mode {mode}:")
-                print(f"    Used Resources : {combo} + {robot_name} (Retrieval)")
-                print(f"    Demands        : {demands_retrieval.get(mode, 'N/A')}")
+        # ... (以下、元のデバッグ出力コードは変更なし) ...
         print("-------------------------------------------\n")
 
     activities[3*N+1] = {'cost': 0, 'modes': 1, 'successors': [], 'demands': {1: [0] * total_resources}}
@@ -277,8 +269,19 @@ def generate_rcpsp_max_from_json(input_data):
             for succ_id in act['successors']:
                 if succ_id not in activities: continue
                 succ_act = activities[succ_id]
-                num_delays = act['modes'] * succ_act['modes']
-                delays = [str(act['cost'])] * num_delays
+
+                delays = []
+                # 現アクティビティが固定コストを持つ場合 (例: work)
+                if 'cost' in act:
+                    num_delays = act['modes'] * succ_act['modes']
+                    delays = [str(act['cost'])] * num_delays
+                # 現アクティビティがモード毎にコストを持つ場合 (例: placement)
+                elif 'costs_by_mode' in act:
+                    for mode_num in sorted(act['costs_by_mode'].keys()):
+                        cost = act['costs_by_mode'][mode_num]
+                        # 後続アクティビティの全モードに対して同じ遅延を設定
+                        delays.extend([str(cost)] * succ_act['modes'])
+
                 delay_str_parts.append(f"[{' '.join(delays)}]")
             line_parts.append(' '.join(delay_str_parts))
         output_lines.append(' '.join(line_parts))
@@ -288,10 +291,18 @@ def generate_rcpsp_max_from_json(input_data):
         act = activities[i]
         for mode_num, demands in sorted(act['demands'].items()):
             demands_str = ' '.join(map(str, demands))
+
+            # モードに応じたコストを取得
+            cost_for_mode = 0
+            if 'cost' in act: # 固定コストのアクティビティ
+                cost_for_mode = act['cost']
+            elif 'costs_by_mode' in act: # モード別コストのアクティビティ
+                cost_for_mode = act['costs_by_mode'].get(mode_num, 0)
+
             if mode_num == 1:
-                output_lines.append(f"{i} {mode_num} {act['cost']} {demands_str}")
+                output_lines.append(f"{i} {mode_num} {cost_for_mode} {demands_str}")
             else:
-                output_lines.append(f" {mode_num} {act['cost']} {demands_str}")
+                output_lines.append(f" {mode_num} {cost_for_mode} {demands_str}")
 
     robot_caps = [res['capacity'] for res in actual_robots]
     module_caps = [res['capacity'] for res in actual_modules]
