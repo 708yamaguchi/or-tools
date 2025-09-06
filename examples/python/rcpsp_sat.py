@@ -636,15 +636,28 @@ def _plot_gantt_chart(
         if not (task_name_full.startswith("Placement-") or task_name_full.startswith("Retrieval-")):
             if base_task_name in task_name_to_required_caps:
                 required_caps = sorted(task_name_to_required_caps[base_task_name])
+
+                # --- ★ここから修正 ---
+                num_caps = len(required_caps)
+                # 複数のCapabilityをタスク行の中心(i)周りに均等に配置するための開始Y座標を計算
+                start_y = i - (num_caps - 1) * 0.15
+
                 for j, cap in enumerate(required_caps):
                     color = capability_color_map.get(cap, "grey")
-                    circle = patches.Circle(
-                        xy=(-j * 0.7 - 0.8, i),
-                        radius=0.2,
+
+                    # 縦に並べるためのY座標を計算
+                    center_y = start_y + j * 0.3
+
+                    # Circleを横長のEllipseに変更
+                    ellipse = patches.Ellipse(
+                        xy=(-1.5, center_y),  # X座標を固定し、計算したY座標を使用
+                        width=1.2,           # 楕円の幅 (横長に設定)
+                        height=0.25,         # 楕円の高さ
                         facecolor=color, edgecolor="black", linewidth=0.5,
                         clip_on=False
                     )
-                    ax.add_patch(circle)
+                    ax.add_patch(ellipse)
+                # --- ★修正ここまで ---
 
         # 2. タスクバーを描画
         if t in executed_tasks and t in selected_recipes:
@@ -1248,12 +1261,40 @@ def main(_):
             all_caps_set.update(res["capabilities"])
     all_caps = sorted(list(all_caps_set))
 
-    cap_colors = cm.get_cmap('Pastel1', len(all_caps))
-    capability_color_map = {cap: cap_colors(i) for i, cap in enumerate(all_caps)}
+    # 1. input_dataからリソース名を種類ごとにリスト化
+    renewable_names = [r['name'] for r in input_data["resources"]["renewable"]]
+    reservoir_names = [r['name'] for r in input_data["resources"]["reservoir"]]
 
-    all_res = [r['name'] for r in input_data["resources"]["renewable"]] + [r['name'] for r in input_data["resources"]["reservoir"]]
-    res_colors = cm.get_cmap('tab20c', len(all_res))
-    resource_color_map = {res: res_colors(i) for i, res in enumerate(all_res)}
+    # 最終的なカラーマップ辞書を初期化
+    resource_color_map = {}
+
+    # 2. Renewable Resources の色を定義 (青系の近い色)
+    if renewable_names:
+        n_renewable = len(renewable_names)
+        # 'Blues'のような連続的カラーマップを選択
+        renewable_cmap = cm.get_cmap('Blues')
+        # マップの中間〜濃い部分から、近い色合いをn個取得
+        renewable_points = np.linspace(0.4, 0.9, n_renewable)
+        renewable_colors = renewable_cmap(renewable_points)
+        # 辞書に登録
+        for name, color in zip(renewable_names, renewable_colors):
+            resource_color_map[name] = color
+
+    # 3. Reservoir Resources の色を定義 (青から離れた、ばらつきのある色)
+    if reservoir_names:
+        n_reservoir = len(reservoir_names)
+        # Resources (主役) には、鮮やかな 'tab10' を割り当て
+        # tab10の最初の色は青なので、2番目のオレンジから使うようにインデックスをずらす
+        reservoir_cmap = cm.get_cmap('tab10')
+        reservoir_colors = [reservoir_cmap((i + 1) % 10) for i in range(n_reservoir)]
+        # 辞書に登録
+        for name, color in zip(reservoir_names, reservoir_colors):
+            resource_color_map[name] = color
+
+    # Capabilities (補助情報) には、ソフト（パステル調）な 'Set3' を割り当て
+    all_caps = sorted(list(all_caps_set))
+    cap_colors = cm.get_cmap('Set3')
+    capability_color_map = {cap: cap_colors(i % 12) for i, cap in enumerate(all_caps)}
 
     task_name_to_required_caps = {task['name']: task['required_capabilities'] for task in input_data['tasks']}
 
