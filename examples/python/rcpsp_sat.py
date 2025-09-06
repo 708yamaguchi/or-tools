@@ -67,40 +67,57 @@ def get_task_ids(task_index):
     return placement_id, work_id, retrieval_id
 
 
-def calculate_all_task_combinations(input_data):
+def _create_placement_retrieval_demand(
+    carrier_robot_idx: int,
+    payload_combo: list[str],
+    demand_sign: int,
+    robot_map: dict,
+    module_map: dict,
+    location_resource_idx: int,
+    num_actual_robots: int,
+    num_renewable: int,
+    total_resources: int
+) -> list[int]:
     """
-    input_dataを受け取り、各タスクの要求を満たす「既約」な
-    リソースの組み合わせを全パターン計算して返します。(以前作成した関数)
-    """
-    def _find_irreducible_covers(required_caps, available_resources):
-        if not required_caps: return [[]]
-        all_valid_covers = []
-        for i in range(1, len(available_resources) + 1):
-            for combo in combinations(available_resources, i):
-                combined_caps = set(c for res in combo for c in res["capabilities"])
-                if required_caps.issubset(combined_caps):
-                    all_valid_covers.append(list(combo))
-        irreducible_solutions = []
-        for combo in all_valid_covers:
-            is_irreducible = True
-            if len(combo) > 1:
-                for sub_combo in combinations(combo, len(combo) - 1):
-                    sub_caps = set(c for res in sub_combo for c in res["capabilities"])
-                    if required_caps.issubset(sub_caps):
-                        is_irreducible = False; break
-            if is_irreducible:
-                solution_names = sorted([res["name"] for res in combo])
-                if solution_names not in irreducible_solutions:
-                    irreducible_solutions.append(solution_names)
-        return irreducible_solutions
+    配置(Placement)または回収(Retrieval)アクティビティのリソースデマンドを生成します。
 
-    all_resources = input_data["resources"]["renewable"] + input_data["resources"]["reservoir"]
-    all_task_combinations = {}
-    for task in input_data["tasks"]:
-        task_name, required_capabilities = task["name"], set(task["required_capabilities"])
-        combinations_for_task = _find_irreducible_covers(required_capabilities, all_resources)
-        all_task_combinations[task_name] = combinations_for_task
-    return all_task_combinations
+    Args:
+        carrier_robot_idx: 運搬ロボットのインデックス。
+        payload_combo: 運搬されるリソース(モジュール等)の組み合わせリスト。
+        demand_sign: Reservoirリソースの消費方向 (+1: 配置, -1: 回収)。
+        robot_map: ロボット名からインデックスへのマッピング。
+        module_map: モジュール名からインデックスへのマッピング。
+        location_resource_idx: 場所リソースのインデックス。
+        num_actual_robots: ロボットの総数。
+        num_renewable: Renewableリソースの総数。
+        total_resources: 全リソースの総数。
+
+    Returns:
+        生成されたデマンドリスト。
+    """
+    demands_mode = [0] * total_resources
+
+    # 1. 運搬ロボット(Renewable)を専有
+    demands_mode[carrier_robot_idx] = 1
+
+    # 2. ペイロード内のリソースを専有
+    for res_name in payload_combo:
+        if res_name in robot_map:
+            demands_mode[robot_map[res_name]] = 1
+        elif res_name in module_map:
+            module_idx = module_map[res_name]
+            # Renewableスロットとして専有
+            demands_mode[num_actual_robots + module_idx] = 1
+            # Reservoirとして消費または補充
+            reservoir_idx = num_renewable + module_idx
+            demands_mode[reservoir_idx] = demand_sign
+
+    # 3. 場所リソースを専有
+    #    (ロボットが関わるタスクであるため、常に専有する)
+    if location_resource_idx != -1:
+        demands_mode[location_resource_idx] = 1
+
+    return demands_mode
 
 
 def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=False):
@@ -242,40 +259,30 @@ def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=Fals
                     mode_to_resources_map[(f"Retrieval-{task_name}", recipe_idx_pr)] = {'carrier': carrier_robot_name, 'payload': sorted(combo)}
 
                     # --- 配置(Placement)デマンド ---
-                    demands_p_mode = [0] * total_resources
-                    # 運搬ロボット(Renewable)を専有
-                    demands_p_mode[j] = 1
-                    # 組み合わせ内のリソース(Renewable)も専有
-                    for res_name in combo:
-                        if res_name in robot_map:
-                            demands_p_mode[robot_map[res_name]] = 1
-                        elif res_name in module_map:
-                            demands_p_mode[num_actual_robots + module_map[res_name]] = 1
-                            # Reservoirとしても「1消費」
-                            reservoir_idx = num_renewable + module_map[res_name]
-                            demands_p_mode[reservoir_idx] = 1
-                    # 場所リソースも専有
-                    if location_resource_idx != -1:
-                        demands_p_mode[location_resource_idx] = 1
-                    demands_placement[mode_num_pr] = demands_p_mode
+                    demands_placement[mode_num_pr] = _create_placement_retrieval_demand(
+                        carrier_robot_idx=j,
+                        payload_combo=combo,
+                        demand_sign=1, # +1で消費
+                        robot_map=robot_map,
+                        module_map=module_map,
+                        location_resource_idx=location_resource_idx,
+                        num_actual_robots=num_actual_robots,
+                        num_renewable=num_renewable,
+                        total_resources=total_resources
+                    )
 
                     # --- 回収(Retrieval)デマンド ---
-                    demands_r_mode = [0] * total_resources
-                    # 運搬ロボット(Renewable)を専有
-                    demands_r_mode[j] = 1
-                    # 組み合わせ内のリソース(Renewable)も専有
-                    for res_name in combo:
-                        if res_name in robot_map:
-                            demands_r_mode[robot_map[res_name]] = 1
-                        elif res_name in module_map:
-                            demands_r_mode[num_actual_robots + module_map[res_name]] = 1
-                            # Reservoirとしても「-1消費」(補充)
-                            reservoir_idx = num_renewable + module_map[res_name]
-                            demands_r_mode[reservoir_idx] = -1
-                    # 場所リソースも専有
-                    if location_resource_idx != -1:
-                        demands_r_mode[location_resource_idx] = 1
-                    demands_retrieval[mode_num_pr] = demands_r_mode
+                    demands_retrieval[mode_num_pr] = _create_placement_retrieval_demand(
+                        carrier_robot_idx=j,
+                        payload_combo=combo,
+                        demand_sign=-1, # -1で補充
+                        robot_map=robot_map,
+                        module_map=module_map,
+                        location_resource_idx=location_resource_idx,
+                        num_actual_robots=num_actual_robots,
+                        num_renewable=num_renewable,
+                        total_resources=total_resources
+                    )
 
         activities[placement_id] = {'modes': num_placement_retrieval_modes, 'successors': [work_id], 'demands': demands_placement, 'costs_by_mode': placement_costs_by_mode}
         activities[work_id] = {'cost': task_duration, 'modes': num_work_modes, 'successors': [retrieval_id], 'demands': demands_work}
@@ -721,7 +728,7 @@ def _plot_gantt_chart(
     capability_color_map,
     resource_color_map,
     input_data,
-    task_id_to_location  # 追加された引数
+    task_id_to_location
 ):
     """視覚的に改善されたGanttチャートをmatplotlibのAxesオブジェクトにプロットします。"""
     y_labels = [task_id_to_name.get(t, f"Task {t}") for t in all_task_ids]
