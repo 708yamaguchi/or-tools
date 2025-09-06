@@ -112,17 +112,22 @@ def generate_rcpsp_max_from_json(input_data):
     --- フォーマット仕様 (修正版) ---
 
     ■ ヘッダー行
-    <タスク数(3*N)> <Renewable Resourcesの数> <Reservoir Resourcesの数>
+    <タスク数(3*N)> <Renewable Resources数> <Reservoir Resources数>
 
     ■ Renewable Resourcesの定義
-    ・数: [実際のロボット数] + [実際のモジュール数] + N
+    ・数: [実際のロボット数] + N
     ・意味:
-      - 0 ~ (ロボット数-1)番目: 各種「空きロボット数」。
-      - (ロボット数) ~ (ロボット数+モジュール数-1)番目: 各種「空きモジュール数」。
-      - (ロボット数+モジュール数) ~ : 各「未実行タスク数」。
+      - 0 ~ (ロボット数-1)番目: 各種ロボット。タスク実行中のみ専有される。
+      - (ロボット数) ~ : 各タスクの「実行権」。タスクが同時に1回しか実行されないことを保証。
+
     ■ Reservoir Resourcesの定義
-    ・数: 0 (★修正: ロック機能はソルバー内の制約で実現するため不要)
+    ・数: [実際のモジュール数]
+    ・意味: 各種モジュール。
+      - 配置(Placement)タスク開始時に、対応するモジュールリソースを「1消費」する。
+      - 回収(Retrieval)タスク開始時に、対応するモジュールリソースを「-1消費」(つまり補充)する。
+      - これにより、一度配置されたモジュールは、回収されるまで他のタスクで配置できない。
     """
+    # 1. データの解析とパラメータ設定
     tasks = input_data.get('tasks', [])
     N = len(tasks)
     task_combinations = calculate_all_task_combinations(input_data)
@@ -133,14 +138,17 @@ def generate_rcpsp_max_from_json(input_data):
 
     actual_modules = input_data['resources']['reservoir']
     num_actual_modules = len(actual_modules)
-    module_map = {res['name']: i + num_actual_robots for i, res in enumerate(actual_modules)}
+    # Reservoirリソースとしてのインデックスをマッピング
+    module_map = {res['name']: i for i, res in enumerate(actual_modules)}
 
-    num_renewable = num_actual_robots + num_actual_modules + N
-    num_reservoir = 0
+    # リソース数の定義を変更
+    num_renewable = num_actual_robots + N
+    num_reservoir = num_actual_modules
     total_resources = num_renewable + num_reservoir
 
     mode_to_resources_map = {}
 
+    # 2. アクティビティ情報の構築
     activities = {}
     start_successors = [id for n in range(1, N + 1) for id in (3 * n - 2, 3 * n - 1)]
     activities[0] = {
@@ -159,67 +167,76 @@ def generate_rcpsp_max_from_json(input_data):
         final_activity_id = 3 * N + 1
 
         demands_placement, demands_work, demands_retrieval = {}, {}, {}
-        placement_costs_by_mode = {}
-        retrieval_costs_by_mode = {}
+        placement_costs_by_mode, retrieval_costs_by_mode = {}, {}
 
         num_work_modes = len(combinations_for_task) if combinations_for_task else 1
         num_placement_retrieval_modes = num_work_modes * num_actual_robots if combinations_for_task and num_actual_robots > 0 else 1
 
         if not combinations_for_task:
+            # モードがない場合のデフォルト処理
             demands_placement[1] = [0] * total_resources
             demands_work[1] = [0] * total_resources
             demands_retrieval[1] = [0] * total_resources
             placement_costs_by_mode[1] = 0
             retrieval_costs_by_mode[1] = 0
         else:
+            # --- 作業(Work)モードのデマンド ---
             for i, combo in enumerate(combinations_for_task):
                 mode_num = i + 1
                 mode_to_resources_map[(task_name, i)] = sorted(combo)
+
                 demands_w_mode = [0] * total_resources
-                for resource_name in combo:
-                    if resource_name in robot_map:
-                        demands_w_mode[robot_map[resource_name]] = 1
-                    elif resource_name in module_map:
-                        demands_w_mode[module_map[resource_name]] = 1
-                demands_w_mode[num_actual_robots + num_actual_modules + (n-1)] = 1
+                # ロボットはRenewableとして専有
+                for res_name in combo:
+                    if res_name in robot_map:
+                        demands_w_mode[robot_map[res_name]] = 1
+                # タスク実行スロットを専有
+                demands_w_mode[num_actual_robots + (n-1)] = 1
+                # Work中はモジュールのReservoirレベルに変化なし
                 demands_work[mode_num] = demands_w_mode
 
+            # --- 配置(Placement)・回収(Retrieval)モードのデマンド ---
             mode_num_pr = 0
             for i, combo in enumerate(combinations_for_task):
-                combo_uses_module = any(res_name in module_map for res_name in combo)
-                cost = 5 if combo_uses_module else 0
-
+                cost = 5 if any(res_name in module_map for res_name in combo) else 0
                 for j in range(num_actual_robots):
                     mode_num_pr += 1
                     placement_costs_by_mode[mode_num_pr] = cost
                     retrieval_costs_by_mode[mode_num_pr] = cost
 
-                    recipe_idx_pr = mode_num_pr - 1
                     carrier_robot_name = actual_robots[j]['name']
+                    recipe_idx_pr = mode_num_pr - 1
+                    mode_to_resources_map[(f"Placement-{task_name}", recipe_idx_pr)] = {'carrier': carrier_robot_name, 'payload': sorted(combo)}
+                    mode_to_resources_map[(f"Retrieval-{task_name}", recipe_idx_pr)] = {'carrier': carrier_robot_name, 'payload': sorted(combo)}
 
-                    ### MODIFICATION ###
-                    # Store carrier and payload separately for better visualization
-                    placement_resources = {'carrier': carrier_robot_name, 'payload': sorted(combo)}
-                    retrieval_resources = {'carrier': carrier_robot_name, 'payload': sorted(combo)}
-                    mode_to_resources_map[(f"Placement-{task_name}", recipe_idx_pr)] = placement_resources
-                    mode_to_resources_map[(f"Retrieval-{task_name}", recipe_idx_pr)] = retrieval_resources
-
+                    # --- 配置(Placement)デマンド ---
                     demands_p_mode = [0] * total_resources
+                    # 運搬ロボット(Renewable)を専有
                     demands_p_mode[j] = 1
+                    # 組み合わせ内のロボット(Renewable)も専有
                     for res_name in combo:
                         if res_name in robot_map:
                             demands_p_mode[robot_map[res_name]] = 1
-                        if res_name in module_map:
-                            demands_p_mode[module_map[res_name]] = 1
+                    # モジュール(Reservoir)を「1消費」
+                    for res_name in combo:
+                         if res_name in module_map:
+                            reservoir_idx = num_renewable + module_map[res_name]
+                            demands_p_mode[reservoir_idx] = 1
                     demands_placement[mode_num_pr] = demands_p_mode
 
+                    # --- 回収(Retrieval)デマンド ---
                     demands_r_mode = [0] * total_resources
+                    # 運搬ロボット(Renewable)を専有
                     demands_r_mode[j] = 1
+                    # 組み合わせ内のロボット(Renewable)も専有
                     for res_name in combo:
                         if res_name in robot_map:
                             demands_r_mode[robot_map[res_name]] = 1
+                    # モジュール(Reservoir)を「-1消費」(補充)
+                    for res_name in combo:
                         if res_name in module_map:
-                            demands_r_mode[module_map[res_name]] = 1
+                            reservoir_idx = num_renewable + module_map[res_name]
+                            demands_r_mode[reservoir_idx] = -1
                     demands_retrieval[mode_num_pr] = demands_r_mode
 
         activities[placement_id] = {'modes': num_placement_retrieval_modes, 'successors': [work_id], 'demands': demands_placement, 'costs_by_mode': placement_costs_by_mode}
@@ -228,10 +245,13 @@ def generate_rcpsp_max_from_json(input_data):
 
     activities[3*N+1] = {'cost': 0, 'modes': 1, 'successors': [], 'demands': {1: [0] * total_resources}}
 
+    # 3. RCPSP/max 形式の文字列を生成
     output_lines = []
-    output_lines.append(f"{3 * N} {num_renewable} {num_reservoir} 0")
+    output_lines.append(f"{3 * N} {num_renewable} {num_reservoir} 0") # ヘッダーを更新
 
+    # 先行関係ブロック (変更なし)
     for i in sorted(activities.keys()):
+        # ... (このブロックは元のコードから変更ありません)
         act = activities[i]
         num_succ = len(act['successors'])
         line_parts = [str(i), str(act['modes']), str(num_succ)]
@@ -241,45 +261,41 @@ def generate_rcpsp_max_from_json(input_data):
             for succ_id in act['successors']:
                 if succ_id not in activities: continue
                 succ_act = activities[succ_id]
-
                 delays = []
                 if 'cost' in act:
-                    num_delays = act['modes'] * succ_act['modes']
-                    delays = [str(act['cost'])] * num_delays
+                    delays = [str(act['cost'])] * (act['modes'] * succ_act['modes'])
                 elif 'costs_by_mode' in act:
                     for mode_num in sorted(act['costs_by_mode'].keys()):
                         cost = act['costs_by_mode'][mode_num]
                         delays.extend([str(cost)] * succ_act['modes'])
-
                 delay_str_parts.append(f"[{' '.join(delays)}]")
             line_parts.append(' '.join(delay_str_parts))
         output_lines.append(' '.join(line_parts))
 
+    # リソース消費ブロック (変更なし)
     for i in sorted(activities.keys()):
+        # ... (このブロックはロジックが汎用的なため変更ありません)
         act = activities[i]
         for mode_num, demands in sorted(act['demands'].items()):
             demands_str = ' '.join(map(str, demands))
-
-            cost_for_mode = 0
-            if 'cost' in act:
-                cost_for_mode = act['cost']
-            elif 'costs_by_mode' in act:
-                cost_for_mode = act['costs_by_mode'].get(mode_num, 0)
-
+            cost_for_mode = act.get('cost', 0) or act.get('costs_by_mode', {}).get(mode_num, 0)
             if mode_num == 1:
                 output_lines.append(f"{i} {mode_num} {cost_for_mode} {demands_str}")
             else:
                 output_lines.append(f" {mode_num} {cost_for_mode} {demands_str}")
 
+    # リソース容量定義ブロック
     robot_caps = [res['capacity'] for res in actual_robots]
-    module_caps = [res['capacity'] for res in actual_modules]
     task_lock_caps = [1] * N
-    renewable_caps = robot_caps + module_caps + task_lock_caps
-    reservoir_caps = []
+    renewable_caps = robot_caps + task_lock_caps
+
+    module_caps = [res['capacity'] for res in actual_modules]
+    reservoir_caps = module_caps
 
     output_lines.append(' '.join(map(str, renewable_caps + reservoir_caps)))
 
     return "\n".join(output_lines), mode_to_resources_map
+
 
 def create_name_mappings(input_data: dict) -> (dict, dict):
     """
@@ -311,7 +327,8 @@ def create_name_mappings(input_data: dict) -> (dict, dict):
 
 def create_resource_name_mappings(input_data):
     """
-    Creates a dictionary mapping resource IDs to resource names.
+    入力データと定義に基づき、リソースIDをリソース名にマッピングする辞書を生成します。
+    (generate_rcpsp_max_from_json のリソース定義と整合性が取れるように修正)
     """
     tasks = input_data.get('tasks', [])
     resources = input_data.get('resources', {})
@@ -319,22 +336,24 @@ def create_resource_name_mappings(input_data):
 
     renewable_resources = resources.get('renewable', []) # Robots
     num_actual_robots = len(renewable_resources)
-
     reservoir_resources = resources.get('reservoir', []) # Modules
-    num_actual_modules = len(reservoir_resources)
 
+    # 1. Renewable Resources のマッピング (ロボット + タスク実行スロット)
     renewable_id_to_name: dict[int, str] = {}
+    # Robots
     for i in range(num_actual_robots):
         renewable_id_to_name[i] = renewable_resources[i].get('name', f"Robot_{i+1}")
-    for i in range(num_actual_modules):
-        resource_id = num_actual_robots + i
-        renewable_id_to_name[resource_id] = reservoir_resources[i].get('name', f"Module_{i+1}")
+    # Task "slots"
     for n in range(N):
         task_name = tasks[n]['name']
-        resource_id = num_actual_robots + num_actual_modules + n
+        resource_id = num_actual_robots + n
         renewable_id_to_name[resource_id] = f"Execution Slot for '{task_name}'"
 
+    # 2. Reservoir Resources のマッピング (モジュール)
     reservoir_id_to_name: dict[int, str] = {}
+    for i, res in enumerate(reservoir_resources):
+        reservoir_id_to_name[i] = res.get('name', f"Module_{i+1}")
+
     return renewable_id_to_name, reservoir_id_to_name
 
 
@@ -635,7 +654,7 @@ def _plot_gantt_chart(
                         ax.barh(i, duration, left=start, height=0.6, color=color,
                               edgecolor="black", hatch='//')
 
-                    # (デバッグ用) 運搬されるモジュールもすべて表示する場合のコード
+                    # (デバッグ時はコメントイン) 運搬されるモジュールもすべて表示する場合のコード
                     # all_res_for_task = [resources_used_data.get('carrier')] + resources_used_data.get('payload', [])
                     # total_bar_height = 0.7
                     # sub_bar_height = total_bar_height / len(all_res_for_task)
@@ -754,12 +773,12 @@ def _process_and_display_solution(
         mode_to_resources_map=mode_to_resources_map,
     )
     # Commenting out time-step print for brevity, can be re-enabled if needed
-    # print_schedule_by_time_step(
-    #     solver, problem, executed_tasks, task_starts, task_ends,
-    #     task_to_resource_demands, all_resources, selected_recipes,
-    #     task_id_to_name, mode_to_name,
-    #     mode_to_resources_map=mode_to_resources_map,
-    # )
+    print_schedule_by_time_step(
+        solver, problem, executed_tasks, task_starts, task_ends,
+        task_to_resource_demands, all_resources, selected_recipes,
+        task_id_to_name, mode_to_name,
+        mode_to_resources_map=mode_to_resources_map,
+    )
 
     visualize_schedule_only(
         solver,
@@ -984,8 +1003,36 @@ def solve_rcpsp(
                     demands.append(c)
                 model.add_cumulative(intervals, demands, c)
         else:
-            # Reservoir constraints... (omitted for brevity, no changes here)
-            pass
+            # Reservoir constraint. Multi-mode compatible
+            reservoir_times = []
+            reservoir_demands = []
+            reservoir_actives = []
+            total_consumption_terms = []
+            for t in all_active_tasks:
+                num_recipes_t = len(problem.tasks[t].recipes)
+                for r in range(num_recipes_t):
+                    demand = task_resource_to_fixed_demands[(t, res)][r]
+                    if demand == 0:
+                        continue
+                    reservoir_times.append(task_starts[t])
+                    reservoir_demands.append(demand)
+                    is_recipe_r_active = task_to_presence_literals[t][r]
+                    reservoir_actives.append(is_recipe_r_active)
+                    total_consumption_terms.append(demand * is_recipe_r_active)
+
+            min_capacity = 0
+            # Add multi-mode compatible reservoir constraint
+            model.AddReservoirConstraintWithActive(
+                reservoir_times,
+                reservoir_demands,
+                reservoir_actives,
+                min_capacity,
+                resource.max_capacity,
+            )
+            # Add constraint on the total consumption of the reservoir resource
+            model.add(
+                cp_model.LinearExpr.sum(total_consumption_terms) == 0
+            )
 
     if problem.is_resource_investment:
         objective = model.new_int_var(0, max_cost, "capacity_costs")
