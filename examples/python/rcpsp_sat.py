@@ -109,7 +109,7 @@ def generate_rcpsp_max_from_json(input_data):
     また、ソルバーの解を可視化するために(タスク名, モード番号) -> [リソース名]の
     マッピング辞書も同時に生成して返します。
 
-    --- フォーマット仕様 (更新版) ---
+    --- フォーマット仕様 (修正版) ---
 
     ■ ヘッダー行
     <タスク数(3*N)> <Renewable Resourcesの数> <Reservoir Resourcesの数>
@@ -122,10 +122,7 @@ def generate_rcpsp_max_from_json(input_data):
       - (ロボット数+モジュール数) ~ : 各「未実行タスク数」。
 
     ■ Reservoir Resourcesの定義
-    ・数: N * 2
-    ・意味:
-      - 0 ~ (N-1)番目: 「タスク用実行ロック」。配置で消費(+1), 作業で返却(-1)されます。
-      - N ~ (2N-1)番目: 「タスク用回収ロック」。配置で消費(+1), 回収で返却(-1)されます。
+    ・数: 0 (★修正: ロック機能はソルバー内の制約で実現するため不要)
     """
     # --------------------------------------------------------------------------
     # 1. データの解析と新しい仕様に合わせたパラメータ設定
@@ -143,7 +140,7 @@ def generate_rcpsp_max_from_json(input_data):
     module_map = {res['name']: i + num_actual_robots for i, res in enumerate(actual_modules)}
 
     num_renewable = num_actual_robots + num_actual_modules + N
-    num_reservoir = 2 * N
+    num_reservoir = 0  # ロック用のReservoirは不要
     total_resources = num_renewable + num_reservoir
 
     mode_to_resources_map = {}
@@ -186,7 +183,6 @@ def generate_rcpsp_max_from_json(input_data):
             for i, combo in enumerate(combinations_for_task):
                 mode_num = i + 1
                 w_combos_by_mode[mode_num] = combo
-                # mode_to_resources_map[(task_name, i)] = combo
                 mode_to_resources_map[(task_name, i)] = sorted(combo)
                 demands_w_mode = [0] * total_resources
 
@@ -200,9 +196,6 @@ def generate_rcpsp_max_from_json(input_data):
                 # 未実行タスク数を消費 (Renewable)
                 demands_w_mode[num_actual_robots + num_actual_modules + (n-1)] = 1
 
-                # 実行ロックを返却 (Reservoir)
-                demands_w_mode[num_renewable + (n-1)] = -1
-
                 demands_work[mode_num] = demands_w_mode
 
             # --- 配置・回収モードのデマンド (Placement/Retrieval Activities) ---
@@ -211,14 +204,11 @@ def generate_rcpsp_max_from_json(input_data):
                 for j in range(num_actual_robots): # 配置/回収はどのロボットでもよい
                     mode_num_pr += 1
                     pr_combos_by_mode[mode_num_pr] = (combo, j)
-                    # ▼▼▼【ここから修正】▼▼▼
                     recipe_idx_pr = mode_num_pr - 1
                     carrier_robot_name = actual_robots[j]['name']
                     resources_used = sorted(combo + [carrier_robot_name])
-                    # Pre/Postタスクのリソース対応をマップに記録 (Key: ("Pre-kitchen", 0), Value: ['r8_robot', 'gripper_module', 'pr2_robot'])
                     mode_to_resources_map[(f"Pre-{task_name}", recipe_idx_pr)] = resources_used
                     mode_to_resources_map[(f"Post-{task_name}", recipe_idx_pr)] = resources_used
-                    # ▲▲▲【ここまで修正】▲▲▲
 
                     # --- 配置モードのデマンド ---
                     demands_p_mode = [0] * total_resources
@@ -228,9 +218,6 @@ def generate_rcpsp_max_from_json(input_data):
                             demands_p_mode[robot_map[res_name]] = 1
                         if res_name in module_map: # モジュールを消費 (Renewable)
                             demands_p_mode[module_map[res_name]] = 1
-
-                    demands_p_mode[num_renewable + (n - 1)] = 1 # 実行ロックを消費 (Reservoir)
-                    demands_p_mode[num_renewable + N + (n - 1)] = 1 # 回収ロックを消費 (Reservoir)
                     demands_placement[mode_num_pr] = demands_p_mode
 
                     # --- 回収モードのデマンド ---
@@ -241,7 +228,6 @@ def generate_rcpsp_max_from_json(input_data):
                             demands_r_mode[robot_map[res_name]] = 1
                         if res_name in module_map: # モジュールを消費 (Renewable)
                             demands_r_mode[module_map[res_name]] = 1
-                    demands_r_mode[num_renewable + N + (n-1)] = -1 # 回収ロックを返却 (Reservoir)
                     demands_retrieval[mode_num_pr] = demands_r_mode
 
         activities[placement_id] = {'cost': 5, 'modes': num_placement_retrieval_modes, 'successors': [work_id], 'demands': demands_placement}
@@ -278,10 +264,9 @@ def generate_rcpsp_max_from_json(input_data):
     # 3. RCPSP/max 形式の文字列を生成
     # --------------------------------------------------------------------------
     output_lines = []
-    # ★変更: ヘッダーのRenewable/Reservoir数を更新
     output_lines.append(f"{3 * N} {num_renewable} {num_reservoir} 0")
 
-    # 先行関係ブロック (変更なし)
+    # 先行関係ブロック
     for i in sorted(activities.keys()):
         act = activities[i]
         num_succ = len(act['successors'])
@@ -298,7 +283,7 @@ def generate_rcpsp_max_from_json(input_data):
             line_parts.append(' '.join(delay_str_parts))
         output_lines.append(' '.join(line_parts))
 
-    # リソース消費ブロック (変更なし)
+    # リソース消費ブロック
     for i in sorted(activities.keys()):
         act = activities[i]
         for mode_num, demands in sorted(act['demands'].items()):
@@ -312,10 +297,7 @@ def generate_rcpsp_max_from_json(input_data):
     module_caps = [res['capacity'] for res in actual_modules]
     task_lock_caps = [1] * N
     renewable_caps = robot_caps + module_caps + task_lock_caps
-
-    # Reservoirは実行ロックと回収ロックのみ
-    reservoir_lock_caps = [1] * (2 * N)
-    reservoir_caps = reservoir_lock_caps
+    reservoir_caps = []
 
     output_lines.append(' '.join(map(str, renewable_caps + reservoir_caps)))
 
@@ -355,38 +337,37 @@ def create_name_mappings(input_data: dict) -> (dict, dict):
 def create_resource_name_mappings(input_data):
     """
     入力データと定義に基づき、リソースIDをリソース名にマッピングする辞書を生成します。
+    (★注: generate_rcpsp_max_from_json のリソース定義と整合性が取れるように修正)
     """
     tasks = input_data.get('tasks', [])
     resources = input_data.get('resources', {})
     N = len(tasks)
 
-    renewable_resources = resources.get('renewable', [])
+    renewable_resources = resources.get('renewable', []) # Robots
     num_actual_robots = len(renewable_resources)
 
-    reservoir_resources = resources.get('reservoir', [])
+    reservoir_resources = resources.get('reservoir', []) # Modules
     num_actual_modules = len(reservoir_resources)
 
     # 1. Renewable Resources のマッピング
+    #    generate_rcpsp_max_from_json の定義順 (robots -> modules -> task slots) に合わせる
     renewable_id_to_name: dict[int, str] = {}
+    # Robots
     for i in range(num_actual_robots):
         renewable_id_to_name[i] = renewable_resources[i].get('name', f"Robot_{i+1}")
+    # ★修正: モジュールはRenewableとして扱われているため、こちらでマッピング
+    for i in range(num_actual_modules):
+        resource_id = num_actual_robots + i
+        renewable_id_to_name[resource_id] = reservoir_resources[i].get('name', f"Module_{i+1}")
+    # Task "slots" (Formerly "Task Lock")
     for n in range(N):
         task_name = tasks[n]['name']
-        resource_id = num_actual_robots + n
-        renewable_id_to_name[resource_id] = f"Task Lock for '{task_name}'"
+        resource_id = num_actual_robots + num_actual_modules + n
+        renewable_id_to_name[resource_id] = f"Execution Slot for '{task_name}'"
 
     # 2. Reservoir Resources のマッピング
+    #    ★修正: ロック機能は削除されたため、Reservoirリソースは0個
     reservoir_id_to_name: dict[int, str] = {}
-    for i in range(num_actual_modules):
-        reservoir_id_to_name[i] = reservoir_resources[i].get('name', f"Module_{i+1}")
-    for n in range(N):
-        task_name = tasks[n]['name']
-        resource_id = num_actual_modules + n
-        reservoir_id_to_name[resource_id] = f"Execution Lock for '{task_name}'"
-    for n in range(N):
-        task_name = tasks[n]['name']
-        resource_id = num_actual_modules + N + n
-        reservoir_id_to_name[resource_id] = f"Retrieval Lock for '{task_name}'"
 
     return renewable_id_to_name, reservoir_id_to_name
 
@@ -477,24 +458,6 @@ def print_schedule_by_task(
             start_val = solver.value(task_starts[t])
             duration_val = solver.value(task_durations[t])
             end_val = solver.value(task_ends[t])
-
-            # # ▼▼▼ モード表示ロジックを修正 ▼▼▼
-            # mode_str = "N/A"
-            # recipe_index = selected_recipes.get(t)
-            # if recipe_index is not None:
-            #     base_task_name = _get_base_task_name(task_name)
-            #     # 'work'タスク（Pre/Postが付かないタスク）の場合のみリソースリストを表示
-            #     if not task_name.startswith("Pre-") and not task_name.startswith("Post-"):
-            #         resources_used = mode_to_resources_map.get((base_task_name, recipe_index))
-            #         if resources_used:
-            #             mode_str = f"Res: {resources_used}"
-            #         else:
-            #             # リソースが見つからない場合は従来のモード番号を表示
-            #             mode_str = f"Mode {recipe_index + 1}"
-            #     else:
-            #         # Pre/Postタスクはモード番号のみ表示
-            #         mode_str = f"Mode {recipe_index + 1}"
-            # # ▲▲▲ ここまで修正 ▲▲▲
 
             # すべてのタスクタイプで統一されたロジックでモード情報を表示する
             mode_str = "N/A"
@@ -913,7 +876,6 @@ def visualize_schedule_and_main_resources(
     plt.xlim(-5, makespan + 5) # 左側にスペースを確保
     axes[0].xaxis.set_major_locator(MaxNLocator(integer=True, nbins=20))
 
-    # ★★★ 凡例 (Legend) を追加 ★★★
     # --- Capabilityの凡例 ---
     cap_patches = [patches.Patch(color=color, label=cap) for cap, color in capability_color_map.items()]
     legend1 = axes[0].legend(handles=cap_patches, title="Capabilities",
@@ -1134,7 +1096,6 @@ def solve_rcpsp(
                 for r in all_recipes
             )
 
-    ## 追加
     M = num_actual_robots
     num_main_tasks = (len(problem.tasks) - 2) // 3
 
@@ -1167,7 +1128,6 @@ def solve_rcpsp(
                 # Workのモードiが選択されることと、対応するPlacementモード群の
                 # いずれか一つが選択されることは、同値である。
                 model.add(work_lits[i] == sum(corresponding_placement_lits))
-    ## 追加
 
     makespan = model.new_int_var(0, horizon, "makespan")
     makespan_size = model.new_int_var(1, horizon, "interval_makespan_size")
@@ -1415,8 +1375,7 @@ def main(_):
     # 1.5 マッピングと色分け辞書を生成
     task_id_to_name, mode_to_name = create_name_mappings(input_data)
     renewable_id_to_name, reservoir_id_to_name = create_resource_name_mappings(input_data)
-    
-    # ★★★ ここからが可視化のための情報生成 ★★★
+
     # Capabilityの色分け辞書
     all_caps = sorted(list(set(cap for task in input_data["tasks"] for cap in task["required_capabilities"])))
     cap_colors = cm.get_cmap('Pastel1', len(all_caps))
@@ -1426,10 +1385,9 @@ def main(_):
     all_res = [r['name'] for r in input_data["resources"]["renewable"]] + [r['name'] for r in input_data["resources"]["reservoir"]]
     res_colors = cm.get_cmap('tab20b', len(all_res))
     resource_color_map = {res: res_colors(i) for i, res in enumerate(all_res)}
-    
+
     # Task名と要求Capabilityのマッピング辞書
     task_name_to_required_caps = {task['name']: task['required_capabilities'] for task in input_data['tasks']}
-    # ★★★ ここまで ★★★
 
     # 2. Generate RCPSP/max format string from JSON
     rcpsp_data_string = generate_rcpsp_max_from_json(input_data)
@@ -1455,10 +1413,11 @@ def main(_):
         proto_file=_OUTPUT_PROTO.value,
         params=_PARAMS.value,
         active_tasks=set(range(1, last_task)),
-        optional_tasks=calculate_optional_tasks(input_data),
+        # optional_tasks=calculate_optional_tasks(input_data),
+        optional_tasks={},  # All tasks must be executed once
         source=0,
         sink=last_task,
-        num_actual_robots=num_actual_robots # ロボット数を引数として渡す 
+        num_actual_robots=num_actual_robots # ロボット数を引数として渡す
     )
 
     # 5. Visualize result
