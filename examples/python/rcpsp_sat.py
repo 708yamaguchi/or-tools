@@ -186,7 +186,8 @@ def generate_rcpsp_max_from_json(input_data):
             for i, combo in enumerate(combinations_for_task):
                 mode_num = i + 1
                 w_combos_by_mode[mode_num] = combo
-                mode_to_resources_map[(task_name, i)] = combo
+                # mode_to_resources_map[(task_name, i)] = combo
+                mode_to_resources_map[(task_name, i)] = sorted(combo)
                 demands_w_mode = [0] * total_resources
 
                 # 使用するロボット/モジュールを消費 (Renewable)
@@ -210,12 +211,22 @@ def generate_rcpsp_max_from_json(input_data):
                 for j in range(num_actual_robots): # 配置/回収はどのロボットでもよい
                     mode_num_pr += 1
                     pr_combos_by_mode[mode_num_pr] = (combo, j)
+                    # ▼▼▼【ここから修正】▼▼▼
+                    recipe_idx_pr = mode_num_pr - 1
+                    carrier_robot_name = actual_robots[j]['name']
+                    resources_used = sorted(combo + [carrier_robot_name])
+                    # Pre/Postタスクのリソース対応をマップに記録 (Key: ("Pre-kitchen", 0), Value: ['r8_robot', 'gripper_module', 'pr2_robot'])
+                    mode_to_resources_map[(f"Pre-{task_name}", recipe_idx_pr)] = resources_used
+                    mode_to_resources_map[(f"Post-{task_name}", recipe_idx_pr)] = resources_used
+                    # ▲▲▲【ここまで修正】▲▲▲
 
                     # --- 配置モードのデマンド ---
                     demands_p_mode = [0] * total_resources
                     demands_p_mode[j] = 1 # j番目のロボットを消費 (Renewable)
-                    for res_name in combo: # モジュールを消費 (Renewable)
-                        if res_name in module_map:
+                    for res_name in combo:
+                        if res_name in robot_map: # ロボットを消費 (Renewable)
+                            demands_p_mode[robot_map[res_name]] = 1
+                        if res_name in module_map: # モジュールを消費 (Renewable)
                             demands_p_mode[module_map[res_name]] = 1
 
                     demands_p_mode[num_renewable + (n - 1)] = 1 # 実行ロックを消費 (Reservoir)
@@ -225,8 +236,10 @@ def generate_rcpsp_max_from_json(input_data):
                     # --- 回収モードのデマンド ---
                     demands_r_mode = [0] * total_resources
                     demands_r_mode[j] = 1 # j番目のロボットを消費 (Renewable)
-                    for res_name in combo: # モジュールを消費 (Renewable)
-                        if res_name in module_map:
+                    for res_name in combo:
+                        if res_name in robot_map: # ロボットを消費 (Renewable)
+                            demands_r_mode[robot_map[res_name]] = 1
+                        if res_name in module_map: # モジュールを消費 (Renewable)
                             demands_r_mode[module_map[res_name]] = 1
                     demands_r_mode[num_renewable + N + (n-1)] = -1 # 回収ロックを返却 (Reservoir)
                     demands_retrieval[mode_num_pr] = demands_r_mode
@@ -439,6 +452,8 @@ def print_schedule_by_task(
     selected_recipes: dict,
     task_id_to_name: dict,
     mode_to_name: dict,
+    # ★ 引数を追加
+    mode_to_resources_map: dict,
 ) -> None:
     """
     タスクごとにスケジュール（開始、期間、終了時刻）を表示する関数
@@ -462,9 +477,37 @@ def print_schedule_by_task(
             start_val = solver.value(task_starts[t])
             duration_val = solver.value(task_durations[t])
             end_val = solver.value(task_ends[t])
-            recipe_index = selected_recipes.get(t, "N/A")
-            display_mode_num = recipe_index + 1 if isinstance(recipe_index, int) else None
-            mode_str = mode_to_name.get(display_mode_num, f"Mode {display_mode_num}") if display_mode_num else "N/A"
+
+            # # ▼▼▼ モード表示ロジックを修正 ▼▼▼
+            # mode_str = "N/A"
+            # recipe_index = selected_recipes.get(t)
+            # if recipe_index is not None:
+            #     base_task_name = _get_base_task_name(task_name)
+            #     # 'work'タスク（Pre/Postが付かないタスク）の場合のみリソースリストを表示
+            #     if not task_name.startswith("Pre-") and not task_name.startswith("Post-"):
+            #         resources_used = mode_to_resources_map.get((base_task_name, recipe_index))
+            #         if resources_used:
+            #             mode_str = f"Res: {resources_used}"
+            #         else:
+            #             # リソースが見つからない場合は従来のモード番号を表示
+            #             mode_str = f"Mode {recipe_index + 1}"
+            #     else:
+            #         # Pre/Postタスクはモード番号のみ表示
+            #         mode_str = f"Mode {recipe_index + 1}"
+            # # ▲▲▲ ここまで修正 ▲▲▲
+
+            # すべてのタスクタイプで統一されたロジックでモード情報を表示する
+            mode_str = "N/A"
+            recipe_index = selected_recipes.get(t)
+            if recipe_index is not None:
+                # フルネームをキーとしてリソースを検索
+                resources_used = mode_to_resources_map.get((task_name, recipe_index))
+                if resources_used:
+                    mode_str = f"Res: {resources_used}"
+                else:
+                    # フォールバックとしてモード番号を表示
+                    mode_str = f"Mode {recipe_index + 1}"
+
             print(
                 f"{task_name:<{name_width}} "
                 f"({mode_str}): "
@@ -495,6 +538,8 @@ def print_schedule_by_time_step(
     selected_recipes: dict,
     task_id_to_name: dict,
     mode_to_name: dict,
+    # ★ 引数を追加
+    mode_to_resources_map: dict,
 ):
     """
     時刻ごとに実行中のタスクとリソースの状態を表示する関数
@@ -502,23 +547,50 @@ def print_schedule_by_time_step(
     print("\n--- Schedule by Time Step ---")
     makespan = int(solver.objective_value)
     for t in range(makespan + 1):
-        running_tasks = []
-        running_tasks_with_mode = []
+        running_tasks_info = []
+        running_tasks_ids = []
         for task_id in executed_tasks:
             start_time = solver.value(task_starts[task_id])
             end_time = solver.value(task_ends[task_id])
             if start_time <= t < end_time:
-                running_tasks.append(task_id)
-                recipe_index = selected_recipes.get(task_id, "N/A")
-                display_mode_num = recipe_index + 1 if isinstance(recipe_index, int) else None
-                mode_str = mode_to_name.get(display_mode_num, f"Mode {display_mode_num}") if display_mode_num else "N/A"
+                running_tasks_ids.append(task_id)
                 task_name = task_id_to_name.get(task_id, f"Task {task_id}")
-                running_tasks_with_mode.append(f"{task_name}({mode_str})")
+
+                # # ▼▼▼ モード表示ロジックを修正 ▼▼▼
+                # mode_str = "N/A"
+                # recipe_index = selected_recipes.get(task_id)
+                # if recipe_index is not None:
+                #     base_task_name = _get_base_task_name(task_name)
+                #     if not task_name.startswith("Pre-") and not task_name.startswith("Post-"):
+                #         resources_used = mode_to_resources_map.get((base_task_name, recipe_index))
+                #         if resources_used:
+                #             mode_str = f"Res: {resources_used}"
+                #         else:
+                #             mode_str = f"Mode {recipe_index + 1}"
+                #     else:
+                #          mode_str = f"Mode {recipe_index + 1}"
+                # # ▲▲▲ ここまで修正 ▲▲▲
+                # すべてのタスクタイプで統一されたロジックでモード情報を表示する
+                mode_str = "N/A"
+                recipe_index = selected_recipes.get(task_id)
+                if recipe_index is not None:
+                    # フルネームをキーとしてリソースを検索
+                    resources_used = mode_to_resources_map.get((task_name, recipe_index))
+                    if resources_used:
+                        mode_str = f"Res: {resources_used}"
+                    else:
+                        # フォールバックとしてモード番号を表示
+                        mode_str = f"Mode {recipe_index + 1}"
+
+                running_tasks_info.append(f"{task_name}({mode_str})")
+
         print(f"[Time: {t}]")
-        if not running_tasks_with_mode:
+        if not running_tasks_info:
             print("  Running Tasks: None")
         else:
-            print(f"  Running Tasks: {running_tasks_with_mode}")
+            print(f"  Running Tasks: {running_tasks_info}")
+
+        # リソース状況の表示（この部分は変更なし）
         print("  Resource Status:")
         for res_id in all_resources:
             resource = problem.resources[res_id]
@@ -528,7 +600,7 @@ def print_schedule_by_time_step(
                 continue
             if resource.renewable:
                 used_capacity = 0
-                for task_id in running_tasks:
+                for task_id in running_tasks_ids:
                     if (
                         task_id in task_to_resource_demands
                         and len(task_to_resource_demands[task_id]) > res_id
@@ -633,7 +705,7 @@ def _plot_gantt_chart(
             recipe_idx = selected_recipes.get(t)
 
             # このタスク・モードで使用されたリソースのリストを取得
-            resources_used = mode_to_resources_map.get((base_task_name, recipe_idx), [])
+            resources_used = mode_to_resources_map.get((task_name_full, recipe_idx), [])
 
             if duration > 0:
                 if not resources_used:
@@ -869,7 +941,6 @@ def _process_and_display_solution(
     task_id_to_name, mode_to_name, renewable_id_to_name,
     reservoir_id_to_name,
     num_actual_robots, num_actual_modules,
-    # ★★★ 以下5つの引数を追加 ★★★
     task_name_to_required_caps,
     mode_to_resources_map,
     capability_color_map,
@@ -897,12 +968,14 @@ def _process_and_display_solution(
     print_schedule_by_task(
         solver, all_active_tasks, executed_tasks, source, sink,
         task_starts, task_durations, task_ends, selected_recipes,
-        task_id_to_name, mode_to_name
+        task_id_to_name, mode_to_name,
+        mode_to_resources_map=mode_to_resources_map, # 引数を追加
     )
     print_schedule_by_time_step(
         solver, problem, executed_tasks, task_starts, task_ends,
         task_to_resource_demands, all_resources, selected_recipes,
-        task_id_to_name, mode_to_name
+        task_id_to_name, mode_to_name,
+        mode_to_resources_map=mode_to_resources_map, # 引数を追加
     )
 
     visualize_schedule_only(
@@ -943,6 +1016,7 @@ def solve_rcpsp(
     source: int,
     sink: int,
     optional_tasks: set[int],
+    num_actual_robots: int,
 ) -> None:
     """Parse and solve a given RCPSP problem in proto format."""
     # Create the model.
@@ -1059,6 +1133,41 @@ def solve_rcpsp(
                 * task_resource_to_fixed_demands[(t, res)][r]
                 for r in all_recipes
             )
+
+    ## 追加
+    M = num_actual_robots
+    num_main_tasks = (len(problem.tasks) - 2) // 3
+
+    for n in range(1, num_main_tasks + 1):
+        placement_id, work_id, retrieval_id = get_task_ids(n)
+
+        # 3つのタスクがすべてアクティブな場合のみ制約を追加
+        if not all(t in active_tasks for t in [placement_id, work_id, retrieval_id]):
+            continue
+
+        placement_lits = task_to_presence_literals[placement_id]
+        work_lits = task_to_presence_literals[work_id]
+        retrieval_lits = task_to_presence_literals[retrieval_id]
+
+        # 【制約1】 PlacementとRetrievalで全く同じモードを選択する
+        # (例: Placementでモード3を選択したら、Retrievalも必ずモード3を選択する)
+        if len(placement_lits) == len(retrieval_lits):
+            for k in range(len(placement_lits)):
+                model.add(placement_lits[k] == retrieval_lits[k])
+
+        # 【制約2】 Workで選択したリソースの組み合わせと、Placement/Retrievalで
+        # 選択したリソースの組み合わせを一致させる
+        if M > 0 and len(work_lits) > 0:
+            num_work_modes = len(work_lits)
+            for i in range(num_work_modes):
+                # Workのi番目のリソース組み合わせに対応するPlacementのモード群
+                # (運搬ロボットM台分のモード)
+                corresponding_placement_lits = placement_lits[i * M : (i + 1) * M]
+
+                # Workのモードiが選択されることと、対応するPlacementモード群の
+                # いずれか一つが選択されることは、同値である。
+                model.add(work_lits[i] == sum(corresponding_placement_lits))
+    ## 追加
 
     makespan = model.new_int_var(0, horizon, "makespan")
     makespan_size = model.new_int_var(1, horizon, "interval_makespan_size")
@@ -1349,6 +1458,7 @@ def main(_):
         optional_tasks=calculate_optional_tasks(input_data),
         source=0,
         sink=last_task,
+        num_actual_robots=num_actual_robots # ロボット数を引数として渡す 
     )
 
     # 5. Visualize result
@@ -1361,7 +1471,6 @@ def main(_):
             reservoir_id_to_name=reservoir_id_to_name,
             num_actual_robots=num_actual_robots,
             num_actual_modules=num_actual_modules,
-            # ★★★ 可視化用の引数を追加 ★★★
             task_name_to_required_caps=task_name_to_required_caps,
             mode_to_resources_map=mode_to_resources_map,
             capability_color_map=capability_color_map,
