@@ -762,6 +762,7 @@ def calculate_all_task_combinations(input_data):
     """
     input_dataを受け取り、各タスクの要求を満たす「既約」な
     リソースの組み合わせを全パターン計算して返します。
+    いずれかのタスクで有効な組み合わせが見つからない場合はNoneを返します。
     """
     def _find_irreducible_covers(required_caps, available_resources):
         if not required_caps: return [[]]
@@ -789,12 +790,18 @@ def calculate_all_task_combinations(input_data):
 
     all_resources = input_data["resources"]["renewable"] + input_data["resources"]["reservoir"]
     all_task_combinations = {}
+
     for task in input_data["tasks"]:
         task_name, required_capabilities = task["name"], set(task["required_capabilities"])
         combinations_for_task = _find_irreducible_covers(required_capabilities, all_resources)
-        all_task_combinations[task_name] = combinations_for_task
-    return all_task_combinations
 
+        # 組み合わせが見つからない場合は即座にエラーを出す。
+        if not combinations_for_task:
+            raise ValueError("エラー: 一部のタスクでリソースの組み合わせが見つかりません")
+
+        all_task_combinations[task_name] = combinations_for_task
+
+    return all_task_combinations
 
 def draw_capabilities(ax, capabilities, x_start, y_pos, cap_color_map, patch_size=0.6, patch_margin=0.1, aspect_correction=1.0):
     """
@@ -1277,10 +1284,10 @@ def main(_):
         "resources": {
             "renewable": [
                 {"name": "r8_robot", "capacity": 1, "capabilities": ["arm", "camera", "gripper"]},
-                {"name": "pr2_robot", "capacity": 1, "capabilities": ["camera", "arm"]},
+                {"name": "pr2_robot", "capacity": 2, "capabilities": ["camera", "arm"]},
             ],
             "reservoir": [
-                {"name": "arm_module", "capacity": 1, "capabilities": ["arm", "camera", "cleaner"]},
+                {"name": "arm_module", "capacity": 3, "capabilities": ["arm", "camera", "cleaner"]},
                 {"name": "temp_module", "capacity": 1, "capabilities": ["temp"]},
                 {"name": "camera_module", "capacity": 1, "capabilities": ["camera"]},
                 {"name": "gripper_module", "capacity": 1, "capabilities": ["gripper"]},
@@ -1288,7 +1295,7 @@ def main(_):
             ]
         },
         "tasks": [
-            {"name": "kitchen", "duration": 30, "required_capabilities": ["arm", "camera", "gripper"]},
+            {"name": "cooking", "duration": 30, "required_capabilities": ["arm", "camera", "gripper"]},
             {"name": "IH", "duration": 20, "required_capabilities": ["arm", "camera", "temp"]},
             {"name": "faucet", "duration": 25, "required_capabilities": ["arm", "gripper"]},
             {"name": "fridge", "duration": 15, "required_capabilities": ["arm", "gripper"]},
