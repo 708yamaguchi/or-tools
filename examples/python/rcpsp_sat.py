@@ -602,10 +602,16 @@ def _plot_gantt_chart(
     task_name_to_required_caps,
     mode_to_resources_map,
     capability_color_map,
-    resource_color_map
+    resource_color_map,
+    input_data  # ロボットとモジュールを区別するために追加
 ):
     """視覚的に改善されたGanttチャートをmatplotlibのAxesオブジェクトにプロットします。"""
     y_labels = [task_id_to_name.get(t, f"Task {t}") for t in all_task_ids]
+
+    # --- 描画のための準備 ---
+    # input_dataからロボットとモジュールの名前リストを作成（高速なルックアップのためセットを使用）
+    robot_names = {r['name'] for r in input_data["resources"]["renewable"]}
+    module_names = {r['name'] for r in input_data["resources"]["reservoir"]}
 
     # --- 階層構造を持つY軸ラベルを生成 ---
     new_y_labels = []
@@ -633,22 +639,15 @@ def _plot_gantt_chart(
         if not (task_name_full.startswith("Placement-") or task_name_full.startswith("Retrieval-")):
             if base_task_name in task_name_to_required_caps:
                 required_caps = sorted(task_name_to_required_caps[base_task_name])
-
                 num_caps = len(required_caps)
-                # 複数のCapabilityをタスク行の中心(i)周りに均等に配置するための開始Y座標を計算
                 start_y = i - (num_caps - 1) * 0.15
-
                 for j, cap in enumerate(required_caps):
                     color = capability_color_map.get(cap, "grey")
-
-                    # 縦に並べるためのY座標を計算
                     center_y = start_y + j * 0.3
-
-                    # Circleを横長のEllipseに変更
                     ellipse = patches.Ellipse(
-                        xy=(-1.5, center_y),  # X座標を固定し、計算したY座標を使用
-                        width=1.2,           # 楕円の幅 (横長に設定)
-                        height=0.25,         # 楕円の高さ
+                        xy=(-1.5, center_y),
+                        width=1.2,
+                        height=0.25,
                         facecolor=color, edgecolor="black", linewidth=0.5,
                         clip_on=False
                     )
@@ -658,45 +657,50 @@ def _plot_gantt_chart(
         if t in executed_tasks and t in selected_recipes:
             start = solver.value(task_starts[t])
             duration = solver.value(task_durations[t])
-            recipe_idx = selected_recipes.get(t)
+            if duration <= 0:
+                continue
 
+            recipe_idx = selected_recipes.get(t)
             resources_used_data = mode_to_resources_map.get((task_name_full, recipe_idx), [])
 
-            if duration > 0:
-                # --- Placement/Retrievalタスクの描画処理 ---
-                if isinstance(resources_used_data, dict):
-                    carrier_robot = resources_used_data.get('carrier')
-                    if carrier_robot:
-                        color = resource_color_map.get(carrier_robot, "grey")
-                        # 運搬ロボットのバーのみを斜線付きで描画
-                        ax.barh(i, duration, left=start, height=0.6, color=color,
-                              edgecolor="black", hatch='//')
+            unique_res_list = []
+            carrier_robot = None
 
-                    # 運搬されるモジュールもすべて表示する場合のコード
-                    all_res_for_task = [resources_used_data.get('carrier')] + resources_used_data.get('payload', [])
-                    total_bar_height = 0.7
-                    sub_bar_height = total_bar_height / len(all_res_for_task)
-                    for k, res_name in enumerate(all_res_for_task):
-                        color = resource_color_map.get(res_name, "grey")
-                        y_pos = (i - total_bar_height / 2) + (sub_bar_height / 2) + k * sub_bar_height
-                        hatch_pattern = '//' if res_name == carrier_robot else None
-                        ax.barh(y_pos, duration, left=start, height=sub_bar_height,
-                              color=color, edgecolor="black", hatch=hatch_pattern)
+            # --- 使用リソースのリストを準備 ---
+            if isinstance(resources_used_data, dict): # Placement/Retrieval タスク
+                carrier_robot = resources_used_data.get('carrier')
+                payload = resources_used_data.get('payload', [])
+                combined_resources = ([carrier_robot] if carrier_robot else []) + payload
+                unique_res_list = list(set(combined_resources))
+            else: # Work タスク
+                unique_res_list = list(set(resources_used_data))
 
-                # --- Workタスクの描画処理 (リソース毎に縦に分割) ---
+            # --- ★リソースのカスタムソート ---
+            # モジュールを優先度0, ロボットを優先度1としてソートする
+            def sort_key(res_name):
+                if res_name in module_names:
+                    return (0, res_name)  # モジュールが先
+                elif res_name in robot_names:
+                    return (1, res_name)  # ロボットが後
                 else:
-                    all_res_for_task = resources_used_data
-                    num_resources = len(all_res_for_task)
-                    if num_resources == 0:
-                        ax.barh(i, duration, left=start, height=0.6, color="grey", edgecolor="black")
-                    else:
-                        total_bar_height = 0.7
-                        sub_bar_height = total_bar_height / num_resources
-                        for k, res_name in enumerate(all_res_for_task):
-                            color = resource_color_map.get(res_name, "grey")
-                            y_pos = (i - total_bar_height / 2) + (sub_bar_height / 2) + k * sub_bar_height
-                            ax.barh(y_pos, duration, left=start, height=sub_bar_height,
-                                  color=color, edgecolor="black")
+                    return (2, res_name)  # その他
+
+            unique_res_list.sort(key=sort_key)
+            all_res_for_task = unique_res_list
+
+            # --- 描画ロジック ---
+            num_resources = len(all_res_for_task)
+            if num_resources == 0:
+                ax.barh(i, duration, left=start, height=0.6, color="lightgrey", edgecolor="black")
+            else:
+                total_bar_height = 0.7
+                sub_bar_height = total_bar_height / num_resources
+                for k, res_name in enumerate(all_res_for_task):
+                    color = resource_color_map.get(res_name, "grey")
+                    y_pos = (i - total_bar_height / 2) + (sub_bar_height / 2) + k * sub_bar_height
+                    hatch_pattern = '//' if res_name == carrier_robot else None
+                    ax.barh(y_pos, duration, left=start, height=sub_bar_height,
+                          color=color, edgecolor="black", hatch=hatch_pattern)
 
         elif t not in executed_tasks:
             ax.text(0, i, "--- SKIPPED ---", va='center', ha='left', style='italic', color='lightgrey')
@@ -735,7 +739,8 @@ def visualize_schedule_only(
         task_name_to_required_caps,
         mode_to_resources_map,
         capability_color_map,
-        resource_color_map
+        resource_color_map,
+        input_data
     )
 
     ax.set_xlabel("Time")
