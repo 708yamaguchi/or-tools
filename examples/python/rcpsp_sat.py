@@ -67,59 +67,6 @@ def get_task_ids(task_index):
     return placement_id, work_id, retrieval_id
 
 
-def _create_placement_retrieval_demand(
-    carrier_robot_idx: int,
-    payload_combo: list[str],
-    demand_sign: int,
-    robot_map: dict,
-    module_map: dict,
-    location_resource_idx: int,
-    num_actual_robots: int,
-    num_renewable: int,
-    total_resources: int
-) -> list[int]:
-    """
-    配置(Placement)または回収(Retrieval)アクティビティのリソースデマンドを生成します。
-
-    Args:
-        carrier_robot_idx: 運搬ロボットのインデックス。
-        payload_combo: 運搬されるリソース(モジュール等)の組み合わせリスト。
-        demand_sign: Reservoirリソースの消費方向 (+1: 配置, -1: 回収)。
-        robot_map: ロボット名からインデックスへのマッピング。
-        module_map: モジュール名からインデックスへのマッピング。
-        location_resource_idx: 場所リソースのインデックス。
-        num_actual_robots: ロボットの総数。
-        num_renewable: Renewableリソースの総数。
-        total_resources: 全リソースの総数。
-
-    Returns:
-        生成されたデマンドリスト。
-    """
-    demands_mode = [0] * total_resources
-
-    # 1. 運搬ロボット(Renewable)を専有
-    demands_mode[carrier_robot_idx] = 1
-
-    # 2. ペイロード内のリソースを専有
-    for res_name in payload_combo:
-        if res_name in robot_map:
-            demands_mode[robot_map[res_name]] = 1
-        elif res_name in module_map:
-            module_idx = module_map[res_name]
-            # Renewableスロットとして専有
-            demands_mode[num_actual_robots + module_idx] = 1
-            # Reservoirとして消費または補充
-            reservoir_idx = num_renewable + module_idx
-            demands_mode[reservoir_idx] = demand_sign
-
-    # 3. 場所リソースを専有
-    #    (ロボットが関わるタスクであるため、常に専有する)
-    if location_resource_idx != -1:
-        demands_mode[location_resource_idx] = 1
-
-    return demands_mode
-
-
 def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=False):
     """
     JSON形式の入力データからRCPSP/max形式の文字列を生成します。
@@ -257,6 +204,36 @@ def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=Fals
                     recipe_idx_pr = mode_num_pr - 1
                     mode_to_resources_map[(f"Placement-{task_name}", recipe_idx_pr)] = {'carrier': carrier_robot_name, 'payload': sorted(combo)}
                     mode_to_resources_map[(f"Retrieval-{task_name}", recipe_idx_pr)] = {'carrier': carrier_robot_name, 'payload': sorted(combo)}
+                    def _create_placement_retrieval_demand(
+                        carrier_robot_idx: int,
+                        payload_combo: list[str],
+                        demand_sign: int,
+                        robot_map: dict,
+                        module_map: dict,
+                        location_resource_idx: int,
+                        num_actual_robots: int,
+                        num_renewable: int,
+                        total_resources: int
+                    ) -> list[int]:
+                        demands_mode = [0] * total_resources
+                        # 1. 運搬ロボット(Renewable)を専有
+                        demands_mode[carrier_robot_idx] = 1
+                        # 2. ペイロード内のリソースを専有
+                        for res_name in payload_combo:
+                            if res_name in robot_map:
+                                demands_mode[robot_map[res_name]] = 1
+                            elif res_name in module_map:
+                                module_idx = module_map[res_name]
+                                # Renewableスロットとして専有
+                                demands_mode[num_actual_robots + module_idx] = 1
+                                # Reservoirとして消費または補充
+                                reservoir_idx = num_renewable + module_idx
+                                demands_mode[reservoir_idx] = demand_sign
+                        # 3. 場所リソースを専有
+                        #    (ロボットが関わるタスクであるため、常に専有する)
+                        if location_resource_idx != -1:
+                            demands_mode[location_resource_idx] = 1
+                        return demands_mode
 
                     # --- 配置(Placement)デマンド ---
                     demands_placement[mode_num_pr] = _create_placement_retrieval_demand(
