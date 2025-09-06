@@ -103,7 +103,7 @@ def calculate_all_task_combinations(input_data):
     return all_task_combinations
 
 
-def generate_rcpsp_max_from_json(input_data):
+def generate_rcpsp_max_from_json(input_data, debug_print=False):
     """
     JSON形式の入力データからRCPSP/max形式の文字列を生成します。
     また、ソルバーの解を可視化するために(タスク名, モード番号) -> [リソース名]の
@@ -157,6 +157,20 @@ def generate_rcpsp_max_from_json(input_data):
 
     mode_to_resources_map = {}
 
+    # デバッグ表示用に、リソースIDから名前へのマッピングを作成
+    if debug_print:
+        id_to_resource_name = {}
+        # Renewable Resources
+        for name, idx in robot_map.items():
+            id_to_resource_name[idx] = f"Robot:{name}"
+        for name, idx in module_map.items():
+            id_to_resource_name[num_actual_robots + idx] = f"Module(Renewable):{name}"
+        for name, idx in location_map.items():
+            id_to_resource_name[num_actual_robots + num_actual_modules + idx] = f"Location:{name}"
+        # Reservoir Resources
+        for name, idx in module_map.items():
+            id_to_resource_name[num_renewable + idx] = f"Module(Reservoir):{name}"
+
     # 2. アクティビティ情報の構築
     activities = {}
     start_successors = [id for n in range(1, N + 1) for id in (3 * n - 2, 3 * n - 1)]
@@ -200,16 +214,17 @@ def generate_rcpsp_max_from_json(input_data):
             for i, combo in enumerate(combinations_for_task):
                 mode_num = i + 1
                 mode_to_resources_map[(task_name, i)] = sorted(combo)
-
                 demands_w_mode = [0] * total_resources
+                robot_is_used = False
                 # ロボット/モジュールをRenewableとして専有
                 for res_name in combo:
                     if res_name in robot_map:
                         demands_w_mode[robot_map[res_name]] = 1
+                        robot_is_used = True
                     elif res_name in module_map:
                         demands_w_mode[num_actual_robots + module_map[res_name]] = 1
-                # 場所リソースを専有
-                if location_resource_idx != -1:
+                # ロボットが使われる場合のみ、場所リソースを専有する
+                if location_resource_idx != -1 and robot_is_used:
                     demands_w_mode[location_resource_idx] = 1
                 demands_work[mode_num] = demands_w_mode
 
@@ -266,6 +281,55 @@ def generate_rcpsp_max_from_json(input_data):
         activities[placement_id] = {'modes': num_placement_retrieval_modes, 'successors': [work_id], 'demands': demands_placement, 'costs_by_mode': placement_costs_by_mode}
         activities[work_id] = {'cost': task_duration, 'modes': num_work_modes, 'successors': [retrieval_id], 'demands': demands_work}
         activities[retrieval_id] = {'modes': num_placement_retrieval_modes, 'successors': [final_activity_id], 'demands': demands_retrieval, 'costs_by_mode': retrieval_costs_by_mode}
+
+        if debug_print:
+            print(f"\n" + "="*15 + f" DEBUG: Task {n} ({task_name}) " + "="*15)
+            print(f"  Location: {task_location}")
+            print(f"  Activity IDs: Placement={placement_id}, Work={work_id}, Retrieval={retrieval_id}")
+
+            def get_demands_str(demands_list):
+                consumed = []
+                for res_id, demand_val in enumerate(demands_list):
+                    if demand_val != 0:
+                        res_name = id_to_resource_name.get(res_id, f"ID_{res_id}")
+                        consumed.append(f"'{res_name}': {demand_val}")
+                return ", ".join(consumed) if consumed else "None"
+
+            # --- Placement Activity ---
+            print(f"\n  -> Activity: Placement ({num_placement_retrieval_modes} modes)")
+            modes_to_show = list(demands_placement.keys())            
+            for mode_idx in modes_to_show:
+                if mode_idx == '...':
+                    print("     ...")
+                    continue
+                recipe_idx = mode_idx - 1
+                combo = mode_to_resources_map.get((f"Placement-{task_name}", recipe_idx), {})
+                print(f"     - Mode {mode_idx}:")
+                print(f"       Combination: Carrier='{combo.get('carrier')}', Payload={combo.get('payload')}")
+                print(f"       Resource Demands: {get_demands_str(demands_placement[mode_idx])}")
+
+            # --- Work Activity ---
+            print(f"\n  -> Activity: Work ({num_work_modes} modes)")
+            for mode_idx, demands in demands_work.items():
+                recipe_idx = mode_idx - 1
+                combo = mode_to_resources_map.get((task_name, recipe_idx), [])
+                print(f"     - Mode {mode_idx}:")
+                print(f"       Combination: {combo}")
+                print(f"       Resource Demands: {get_demands_str(demands)}")
+
+            # --- Retrieval Activity ---
+            print(f"\n  -> Activity: Retrieval ({num_placement_retrieval_modes} modes)")
+            modes_to_show = list(demands_retrieval.keys())
+            for mode_idx in modes_to_show:
+                if mode_idx == '...':
+                    print("     ...")
+                    continue
+                recipe_idx = mode_idx - 1
+                combo = mode_to_resources_map.get((f"Retrieval-{task_name}", recipe_idx), {})
+                print(f"     - Mode {mode_idx}:")
+                print(f"       Combination: Carrier='{combo.get('carrier')}', Payload={combo.get('payload')}")
+                print(f"       Resource Demands: {get_demands_str(demands_retrieval[mode_idx])}")
+            print("="*58)
 
     activities[3*N+1] = {'cost': 0, 'modes': 1, 'successors': [], 'demands': {1: [0] * total_resources}}
 
@@ -1356,7 +1420,8 @@ def setup_rcpsp_problem(input_data: dict) -> (rcpsp_pb2.RcpspProblem, dict):
     """
     入力データをRCPSP形式に変換し、ソルバー用の問題オブジェクトをセットアップします。
     """
-    rcpsp_data_string, mode_to_resources_map = generate_rcpsp_max_from_json(input_data)
+    rcpsp_data_string, mode_to_resources_map = generate_rcpsp_max_from_json(
+        input_data, debug_print=True)
     print("\n" + "="*25 + " RCPSP/max Data " + "="*25)
     print(rcpsp_data_string)
     print("="*66 + "\n")
