@@ -115,10 +115,11 @@ def generate_rcpsp_max_from_json(input_data):
     <タスク数(3*N)> <Renewable Resources数> <Reservoir Resources数>
 
     ■ Renewable Resourcesの定義
-    ・数: [実際のロボット数] + N
+    ・数: [実際のロボット数] + [実際のモジュール数] + N
     ・意味:
       - 0 ~ (ロボット数-1)番目: 各種ロボット。タスク実行中のみ専有される。
-      - (ロボット数) ~ : 各タスクの「実行権」。タスクが同時に1回しか実行されないことを保証。
+      - (ロボット数) ~ (ロボット数+モジュール数-1)番目: 各種モジュール。タスク実行中のみ専有される。
+      - (ロボット数+モジュール数) ~ : 各タスクの「実行権」。タスクが同時に1回しか実行されないことを保証。
 
     ■ Reservoir Resourcesの定義
     ・数: [実際のモジュール数]
@@ -138,11 +139,10 @@ def generate_rcpsp_max_from_json(input_data):
 
     actual_modules = input_data['resources']['reservoir']
     num_actual_modules = len(actual_modules)
-    # Reservoirリソースとしてのインデックスをマッピング
     module_map = {res['name']: i for i, res in enumerate(actual_modules)}
 
     # リソース数の定義を変更
-    num_renewable = num_actual_robots + N
+    num_renewable = num_actual_robots + num_actual_modules + N
     num_reservoir = num_actual_modules
     total_resources = num_renewable + num_reservoir
 
@@ -186,12 +186,14 @@ def generate_rcpsp_max_from_json(input_data):
                 mode_to_resources_map[(task_name, i)] = sorted(combo)
 
                 demands_w_mode = [0] * total_resources
-                # ロボットはRenewableとして専有
+                # ロボット/モジュールをRenewableとして専有
                 for res_name in combo:
                     if res_name in robot_map:
                         demands_w_mode[robot_map[res_name]] = 1
+                    elif res_name in module_map:
+                        demands_w_mode[num_actual_robots + module_map[res_name]] = 1
                 # タスク実行スロットを専有
-                demands_w_mode[num_actual_robots + (n-1)] = 1
+                demands_w_mode[num_actual_robots + num_actual_modules + (n - 1)] = 1
                 # Work中はモジュールのReservoirレベルに変化なし
                 demands_work[mode_num] = demands_w_mode
 
@@ -213,13 +215,13 @@ def generate_rcpsp_max_from_json(input_data):
                     demands_p_mode = [0] * total_resources
                     # 運搬ロボット(Renewable)を専有
                     demands_p_mode[j] = 1
-                    # 組み合わせ内のロボット(Renewable)も専有
+                    # 組み合わせ内のリソース(Renewable)も専有
                     for res_name in combo:
                         if res_name in robot_map:
                             demands_p_mode[robot_map[res_name]] = 1
-                    # モジュール(Reservoir)を「1消費」
-                    for res_name in combo:
-                         if res_name in module_map:
+                        elif res_name in module_map:
+                            demands_p_mode[num_actual_robots + module_map[res_name]] = 1
+                            # Reservoirとしても「1消費」
                             reservoir_idx = num_renewable + module_map[res_name]
                             demands_p_mode[reservoir_idx] = 1
                     demands_placement[mode_num_pr] = demands_p_mode
@@ -228,13 +230,13 @@ def generate_rcpsp_max_from_json(input_data):
                     demands_r_mode = [0] * total_resources
                     # 運搬ロボット(Renewable)を専有
                     demands_r_mode[j] = 1
-                    # 組み合わせ内のロボット(Renewable)も専有
+                    # 組み合わせ内のリソース(Renewable)も専有
                     for res_name in combo:
                         if res_name in robot_map:
                             demands_r_mode[robot_map[res_name]] = 1
-                    # モジュール(Reservoir)を「-1消費」(補充)
-                    for res_name in combo:
-                        if res_name in module_map:
+                        elif res_name in module_map:
+                            demands_r_mode[num_actual_robots + module_map[res_name]] = 1
+                            # Reservoirとしても「-1消費」(補充)
                             reservoir_idx = num_renewable + module_map[res_name]
                             demands_r_mode[reservoir_idx] = -1
                     demands_retrieval[mode_num_pr] = demands_r_mode
@@ -286,11 +288,10 @@ def generate_rcpsp_max_from_json(input_data):
 
     # リソース容量定義ブロック
     robot_caps = [res['capacity'] for res in actual_robots]
+    module_renewable_caps = [res['capacity'] for res in actual_modules]
     task_lock_caps = [1] * N
-    renewable_caps = robot_caps + task_lock_caps
-
-    module_caps = [res['capacity'] for res in actual_modules]
-    reservoir_caps = module_caps
+    renewable_caps = robot_caps + module_renewable_caps + task_lock_caps
+    reservoir_caps = module_renewable_caps
 
     output_lines.append(' '.join(map(str, renewable_caps + reservoir_caps)))
 
@@ -671,16 +672,16 @@ def _plot_gantt_chart(
                         ax.barh(i, duration, left=start, height=0.6, color=color,
                               edgecolor="black", hatch='//')
 
-                    # (デバッグ時はコメントイン) 運搬されるモジュールもすべて表示する場合のコード
-                    # all_res_for_task = [resources_used_data.get('carrier')] + resources_used_data.get('payload', [])
-                    # total_bar_height = 0.7
-                    # sub_bar_height = total_bar_height / len(all_res_for_task)
-                    # for k, res_name in enumerate(all_res_for_task):
-                    #     color = resource_color_map.get(res_name, "grey")
-                    #     y_pos = (i - total_bar_height / 2) + (sub_bar_height / 2) + k * sub_bar_height
-                    #     hatch_pattern = '//' if res_name == carrier_robot else None
-                    #     ax.barh(y_pos, duration, left=start, height=sub_bar_height,
-                    #           color=color, edgecolor="black", hatch=hatch_pattern)
+                    # 運搬されるモジュールもすべて表示する場合のコード
+                    all_res_for_task = [resources_used_data.get('carrier')] + resources_used_data.get('payload', [])
+                    total_bar_height = 0.7
+                    sub_bar_height = total_bar_height / len(all_res_for_task)
+                    for k, res_name in enumerate(all_res_for_task):
+                        color = resource_color_map.get(res_name, "grey")
+                        y_pos = (i - total_bar_height / 2) + (sub_bar_height / 2) + k * sub_bar_height
+                        hatch_pattern = '//' if res_name == carrier_robot else None
+                        ax.barh(y_pos, duration, left=start, height=sub_bar_height,
+                              color=color, edgecolor="black", hatch=hatch_pattern)
 
                 # --- Workタスクの描画処理 (リソース毎に縦に分割) ---
                 else:
