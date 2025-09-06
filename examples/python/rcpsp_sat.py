@@ -103,7 +103,7 @@ def calculate_all_task_combinations(input_data):
     return all_task_combinations
 
 
-def generate_rcpsp_max_from_json(input_data, debug_print=False):
+def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=False):
     """
     JSON形式の入力データからRCPSP/max形式の文字列を生成します。
     また、ソルバーの解を可視化するために(タスク名, モード番号) -> [リソース名]の
@@ -135,7 +135,6 @@ def generate_rcpsp_max_from_json(input_data, debug_print=False):
     # 1. データの解析とパラメータ設定
     tasks = input_data.get('tasks', [])
     N = len(tasks)
-    task_combinations = calculate_all_task_combinations(input_data)
 
     actual_robots = input_data['resources']['renewable']
     num_actual_robots = len(actual_robots)
@@ -632,14 +631,14 @@ def _get_base_task_name(task_name: str) -> str:
 
 def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_data, show_symbols=True):
     """
-    ### 変更 ###
-    凡例内の楕円サイズを微調整し、全体の見た目を統一
+    ### 変更点 ###
+    - Resourcesの凡例を「Robots (Renewable)」と「Modules (Reservoir)」に分割
+    - それぞれに小見出しを追加して視覚的に分かりやすくした
     """
     # --- Capabilities Legend ---
     fig.text(0.83, 0.90, "Capabilities", fontsize=12, fontweight='bold')
     y_pos = 0.88
     for cap, color in capability_color_map.items():
-        # サイズを height=width にして正円に
         ellipse = patches.Ellipse(xy=(0.835, y_pos), width=0.012, height=0.012,
                                   facecolor=color, edgecolor='black',
                                   transform=fig.transFigure, figure=fig)
@@ -650,9 +649,11 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
     # --- Resources Legend ---
     fig.text(0.83, y_pos - 0.02, "Resources", fontsize=12, fontweight='bold')
     y_pos -= 0.05
-    all_resources = input_data["resources"]["renewable"] + input_data["resources"]["reservoir"]
 
-    for res in all_resources:
+    # 1. Robots (Renewable) のセクション
+    fig.text(0.83, y_pos, "Robots", fontsize=10, fontweight='bold', style='italic', color='dimgray')
+    y_pos -= 0.035
+    for res in input_data["resources"]["renewable"]:
         res_name = res["name"]
         res_color = resource_color_map.get(res_name, "grey")
         capacity = res["capacity"]
@@ -673,6 +674,34 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
             x_pos_cap += 0.012
         y_pos -= 0.045
 
+    # セクション間のスペースを確保
+    y_pos -= 0.02
+
+    # 2. Modules (Reservoir) のセクション
+    fig.text(0.83, y_pos, "Modules", fontsize=10, fontweight='bold', style='italic', color='dimgray')
+    y_pos -= 0.035
+    for res in input_data["resources"]["reservoir"]:
+        res_name = res["name"]
+        res_color = resource_color_map.get(res_name, "grey")
+        capacity = res["capacity"]
+
+        fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.015), 0.01, 0.02,
+                                          facecolor=res_color, edgecolor='black',
+                                          transform=fig.transFigure, figure=fig)])
+        fig.text(0.85, y_pos, res_name, fontsize=10, va='center')
+        fig.text(0.85, y_pos - 0.015, f"(Cap: {capacity})", fontsize=8, color='dimgray', va='center')
+
+        x_pos_cap = 0.92
+        for cap in res["capabilities"]:
+            cap_color = capability_color_map.get(cap, "grey")
+            ellipse = patches.Ellipse((x_pos_cap, y_pos), width=0.01, height=0.01,
+                                    facecolor=cap_color, edgecolor="black", linewidth=0.5,
+                                    transform=fig.transFigure, figure=fig)
+            fig.patches.append(ellipse)
+            x_pos_cap += 0.012
+        y_pos -= 0.045
+
+    # --- Symbols Legend ---
     if show_symbols:
         y_pos -= 0.01
         fig.text(0.83, y_pos, "Symbols", fontsize=12, fontweight='bold')
@@ -948,7 +977,7 @@ def calculate_all_task_combinations(input_data):
 
         # 組み合わせが見つからない場合は即座にエラーを出す。
         if not combinations_for_task:
-            raise ValueError("エラー: 一部のタスクでリソースの組み合わせが見つかりません")
+            raise ValueError("[calculate_all_task_combinations] エラー: 一部のタスクでリソースの組み合わせが見つかりません")
 
         all_task_combinations[task_name] = combinations_for_task
 
@@ -1053,6 +1082,7 @@ def _process_and_display_solution(
     mode_to_resources_map,
     capability_color_map,
     resource_color_map,
+    irreducible_combinations,
     input_data
 ):
     """Processes and displays the solution from the solver."""
@@ -1086,7 +1116,6 @@ def _process_and_display_solution(
         mode_to_resources_map=mode_to_resources_map,
     )
 
-    irreducible_combinations = calculate_all_task_combinations(input_data)
     visualize_task_combinations(
         input_data,
         irreducible_combinations,
@@ -1416,12 +1445,12 @@ def create_color_maps(input_data: dict) -> (dict, dict):
 
     return resource_color_map, capability_color_map
 
-def setup_rcpsp_problem(input_data: dict) -> (rcpsp_pb2.RcpspProblem, dict):
+def setup_rcpsp_problem(input_data: dict, combinations: dict) -> (rcpsp_pb2.RcpspProblem, dict):
     """
     入力データをRCPSP形式に変換し、ソルバー用の問題オブジェクトをセットアップします。
     """
     rcpsp_data_string, mode_to_resources_map = generate_rcpsp_max_from_json(
-        input_data, debug_print=True)
+        input_data, combinations, debug_print=True)
     print("\n" + "="*25 + " RCPSP/max Data " + "="*25)
     print(rcpsp_data_string)
     print("="*66 + "\n")
@@ -1478,9 +1507,15 @@ def main(_):
     # 色設定を専用関数で実行
     resource_color_map, capability_color_map = create_color_maps(input_data)
 
+    try:
+        irreducible_combinations = calculate_all_task_combinations(input_data)
+    except ValueError as e:
+        print(e)
+        return
+
     # --- 2. 問題の構築 ---
     # RCPSP問題のセットアップを専用関数で実行
-    problem, mode_to_resources_map = setup_rcpsp_problem(input_data)
+    problem, mode_to_resources_map = setup_rcpsp_problem(input_data, irreducible_combinations)
 
     # --- 3. ソルバーの実行 ---
     num_actual_robots = len(input_data["resources"]["renewable"])
@@ -1508,6 +1543,7 @@ def main(_):
             mode_to_resources_map=mode_to_resources_map,
             capability_color_map=capability_color_map,
             resource_color_map=resource_color_map,
+            irreducible_combinations=irreducible_combinations,
             input_data=input_data,
             **results,
         )
