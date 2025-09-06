@@ -109,24 +109,28 @@ def generate_rcpsp_max_from_json(input_data):
     また、ソルバーの解を可視化するために(タスク名, モード番号) -> [リソース名]の
     マッピング辞書も同時に生成して返します。
 
-    --- フォーマット仕様 (修正版) ---
+    --- フォーマット仕様 (場所リソース対応版) ---
 
     ■ ヘッダー行
     <タスク数(3*N)> <Renewable Resources数> <Reservoir Resources数>
 
     ■ Renewable Resourcesの定義
-    ・数: [実際のロボット数] + [実際のモジュール数] + N
+    ・数: [ロボット数] + [モジュール数] + [場所数]
     ・意味:
-      - 0 ~ (ロボット数-1)番目: 各種ロボット。タスク実行中のみ専有される。
-      - (ロボット数) ~ (ロボット数+モジュール数-1)番目: 各種モジュール。タスク実行中のみ専有される。
-      - (ロボット数+モジュール数) ~ : 各タスクの「実行権」。タスクが同時に1回しか実行されないことを保証。
+      - 0 ~ (ロボット数-1)番目:
+          各種ロボット。タスク実行中のみ専有される。
+      - (ロボット数) ~ (ロボット数+モジュール数-1)番目:
+          各種モジュール。タスク実行中のみ専有される。(Reservoirとは別枠)
+      - (ロボット数+モジュール数) ~ :
+          各種場所。その場所でおこなわれるタスク(Placement, Work, Retrieval)の
+          実行中に専有される。Capacityは場所ごとに設定可能。
 
     ■ Reservoir Resourcesの定義
-    ・数: [実際のモジュール数]
+    ・数: [モジュール数]
     ・意味: 各種モジュール。
       - 配置(Placement)タスク開始時に、対応するモジュールリソースを「1消費」する。
       - 回収(Retrieval)タスク開始時に、対応するモジュールリソースを「-1消費」(つまり補充)する。
-      - これにより、一度配置されたモジュールは、回収されるまで他のタスクで配置できない。
+      - これにより、一度配置されたモジュールは、回収されるまで他のタスクで利用できない。
     """
     # 1. データの解析とパラメータ設定
     tasks = input_data.get('tasks', [])
@@ -141,8 +145,13 @@ def generate_rcpsp_max_from_json(input_data):
     num_actual_modules = len(actual_modules)
     module_map = {res['name']: i for i, res in enumerate(actual_modules)}
 
+    # 場所情報の読み込み
+    locations = input_data.get('locations', [])
+    num_locations = len(locations)
+    location_map = {loc['name']: i for i, loc in enumerate(locations)}
+
     # リソース数の定義を変更
-    num_renewable = num_actual_robots + num_actual_modules + N
+    num_renewable = num_actual_robots + num_actual_modules + num_locations
     num_reservoir = num_actual_modules
     total_resources = num_renewable + num_reservoir
 
@@ -162,6 +171,13 @@ def generate_rcpsp_max_from_json(input_data):
         task_name = task['name']
         task_duration = task['duration']
         combinations_for_task = task_combinations[task_name]
+
+        # 場所リソースのインデックスを特定
+        task_location = task.get('location')
+        location_resource_idx = -1
+        if task_location and task_location in location_map:
+            location_resource_idx = num_actual_robots + num_actual_modules + location_map[task_location]
+
 
         placement_id, work_id, retrieval_id = 3*n-2, 3*n-1, 3*n
         final_activity_id = 3 * N + 1
@@ -192,9 +208,9 @@ def generate_rcpsp_max_from_json(input_data):
                         demands_w_mode[robot_map[res_name]] = 1
                     elif res_name in module_map:
                         demands_w_mode[num_actual_robots + module_map[res_name]] = 1
-                # タスク実行スロットを専有
-                demands_w_mode[num_actual_robots + num_actual_modules + (n - 1)] = 1
-                # Work中はモジュールのReservoirレベルに変化なし
+                # 場所リソースを専有
+                if location_resource_idx != -1:
+                    demands_w_mode[location_resource_idx] = 1
                 demands_work[mode_num] = demands_w_mode
 
             # --- 配置(Placement)・回収(Retrieval)モードのデマンド ---
@@ -224,6 +240,9 @@ def generate_rcpsp_max_from_json(input_data):
                             # Reservoirとしても「1消費」
                             reservoir_idx = num_renewable + module_map[res_name]
                             demands_p_mode[reservoir_idx] = 1
+                    # 場所リソースも専有
+                    if location_resource_idx != -1:
+                        demands_p_mode[location_resource_idx] = 1
                     demands_placement[mode_num_pr] = demands_p_mode
 
                     # --- 回収(Retrieval)デマンド ---
@@ -239,6 +258,9 @@ def generate_rcpsp_max_from_json(input_data):
                             # Reservoirとしても「-1消費」(補充)
                             reservoir_idx = num_renewable + module_map[res_name]
                             demands_r_mode[reservoir_idx] = -1
+                    # 場所リソースも専有
+                    if location_resource_idx != -1:
+                        demands_r_mode[location_resource_idx] = 1
                     demands_retrieval[mode_num_pr] = demands_r_mode
 
         activities[placement_id] = {'modes': num_placement_retrieval_modes, 'successors': [work_id], 'demands': demands_placement, 'costs_by_mode': placement_costs_by_mode}
@@ -253,7 +275,6 @@ def generate_rcpsp_max_from_json(input_data):
 
     # 先行関係ブロック (変更なし)
     for i in sorted(activities.keys()):
-        # ... (このブロックは元のコードから変更ありません)
         act = activities[i]
         num_succ = len(act['successors'])
         line_parts = [str(i), str(act['modes']), str(num_succ)]
@@ -276,7 +297,6 @@ def generate_rcpsp_max_from_json(input_data):
 
     # リソース消費ブロック (変更なし)
     for i in sorted(activities.keys()):
-        # ... (このブロックはロジックが汎用的なため変更ありません)
         act = activities[i]
         for mode_num, demands in sorted(act['demands'].items()):
             demands_str = ' '.join(map(str, demands))
@@ -289,8 +309,8 @@ def generate_rcpsp_max_from_json(input_data):
     # リソース容量定義ブロック
     robot_caps = [res['capacity'] for res in actual_robots]
     module_renewable_caps = [res['capacity'] for res in actual_modules]
-    task_lock_caps = [1] * N
-    renewable_caps = robot_caps + module_renewable_caps + task_lock_caps
+    location_caps = [loc['capacity'] for loc in locations]
+    renewable_caps = robot_caps + module_renewable_caps + location_caps
     reservoir_caps = module_renewable_caps
 
     output_lines.append(' '.join(map(str, renewable_caps + reservoir_caps)))
@@ -328,26 +348,30 @@ def create_name_mappings(input_data: dict) -> (dict, dict):
 def create_resource_name_mappings(input_data):
     """
     入力データと定義に基づき、リソースIDをリソース名にマッピングする辞書を生成します。
-    (generate_rcpsp_max_from_json のリソース定義と整合性が取れるように修正)
+    (場所リソースを考慮し、モジュールのRenewableリソースのバグを修正)
     """
-    tasks = input_data.get('tasks', [])
     resources = input_data.get('resources', {})
-    N = len(tasks)
+    locations = input_data.get('locations', [])
 
     renewable_resources = resources.get('renewable', []) # Robots
     num_actual_robots = len(renewable_resources)
     reservoir_resources = resources.get('reservoir', []) # Modules
+    num_actual_modules = len(reservoir_resources)
 
-    # 1. Renewable Resources のマッピング (ロボット + タスク実行スロット)
+    # 1. Renewable Resources のマッピング
     renewable_id_to_name: dict[int, str] = {}
-    # Robots
-    for i in range(num_actual_robots):
-        renewable_id_to_name[i] = renewable_resources[i].get('name', f"Robot_{i+1}")
-    # Task "slots"
-    for n in range(N):
-        task_name = tasks[n]['name']
-        resource_id = num_actual_robots + n
-        renewable_id_to_name[resource_id] = f"Execution Slot for '{task_name}'"
+    # Robots (ID: 0 ~ num_actual_robots-1)
+    for i, res in enumerate(renewable_resources):
+        renewable_id_to_name[i] = res.get('name', f"Robot_{i+1}")
+    # Modules (as Renewable) (ID: num_actual_robots ~ num_actual_robots+num_actual_modules-1)
+    for i, res in enumerate(reservoir_resources):
+        resource_id = num_actual_robots + i
+        renewable_id_to_name[resource_id] = f"{res.get('name')} (Renewable Slot)"
+    # Locations (ID: num_actual_robots+num_actual_modules ~ )
+    for i, loc in enumerate(locations):
+        resource_id = num_actual_robots + num_actual_modules + i
+        renewable_id_to_name[resource_id] = f"Location: {loc.get('name')}"
+
 
     # 2. Reservoir Resources のマッピング (モジュール)
     reservoir_id_to_name: dict[int, str] = {}
@@ -603,13 +627,13 @@ def _plot_gantt_chart(
     mode_to_resources_map,
     capability_color_map,
     resource_color_map,
-    input_data  # ロボットとモジュールを区別するために追加
+    input_data,
+    task_id_to_location  # 追加された引数
 ):
     """視覚的に改善されたGanttチャートをmatplotlibのAxesオブジェクトにプロットします。"""
     y_labels = [task_id_to_name.get(t, f"Task {t}") for t in all_task_ids]
 
     # --- 描画のための準備 ---
-    # input_dataからロボットとモジュールの名前リストを作成（高速なルックアップのためセットを使用）
     robot_names = {r['name'] for r in input_data["resources"]["renewable"]}
     module_names = {r['name'] for r in input_data["resources"]["reservoir"]}
 
@@ -629,6 +653,42 @@ def _plot_gantt_chart(
 
     ax.set_yticks(range(len(new_y_labels)))
     ax.set_yticklabels(new_y_labels)
+
+
+    # ★ 場所の区切り線とラベルを描画 ★
+    location_info = {loc['name']: loc for loc in input_data.get('locations', [])}
+    location_ranges = {}
+    current_loc_name = None
+
+    # 場所ごとのタスクの開始・終了インデックスを記録
+    for i, t_id in enumerate(all_task_ids):
+        loc = task_id_to_location.get(t_id)
+        if loc != current_loc_name:
+            if current_loc_name is not None:
+                location_ranges[current_loc_name]['end'] = i - 1
+            if loc is not None:
+                location_ranges[loc] = {'start': i, 'end': -1}
+            current_loc_name = loc
+    if current_loc_name is not None:
+        location_ranges[current_loc_name]['end'] = len(all_task_ids) - 1
+
+    # 区切り線とラベルを描画
+        for loc, y_range in location_ranges.items():
+            # 区切り線
+            if y_range['start'] > 0:
+                ax.axhline(y=y_range['start'] - 0.5, color='black', linestyle='-', linewidth=1.2)
+            # ラベル
+            info = location_info.get(loc)
+            if info:
+                # ラベルのY座標を領域の下端に設定
+                y_pos_bottom = y_range['end'] + 0.35
+                label = f"{info['name'].upper()} (Cap: {info['capacity']})"
+                ax.text(-7, y_pos_bottom, label,
+                        va='bottom',  # 垂直方向の配置基準を 'bottom' に変更
+                        ha='left',
+                        fontsize=10,
+                        fontweight='bold', color='black',
+                        bbox=dict(boxstyle="round,pad=0.3", fc='whitesmoke', ec='none', alpha=0.8))
 
     # 各タスクのバーをプロット
     for i, t in enumerate(all_task_ids):
@@ -675,8 +735,7 @@ def _plot_gantt_chart(
             else: # Work タスク
                 unique_res_list = list(set(resources_used_data))
 
-            # --- ★リソースのカスタムソート ---
-            # モジュールを優先度0, ロボットを優先度1としてソートする
+            # --- リソースのカスタムソート ---
             def sort_key(res_name):
                 if res_name in module_names:
                     return (0, res_name)  # モジュールが先
@@ -720,34 +779,62 @@ def visualize_schedule_only(
     mode_to_resources_map,
     capability_color_map,
     resource_color_map,
-    input_data  # Pass input_data for legend generation
+    input_data
 ):
     """
     Visualizes the scheduling result with the improved Gantt chart.
+    (タスクを場所でソートする機能を追加)
     """
+    # 1. 場所情報に基づいてタスクをソートするための準備
+    locations = input_data.get('locations', [])
+    tasks_data = input_data.get('tasks', [])
+    location_order = {loc['name']: i for i, loc in enumerate(locations)}
+    name_to_task_id = {v: k for k, v in task_id_to_name.items()}
+
+    task_id_to_location = {}
+    for task_info in tasks_data:
+        base_name = task_info['name']
+        location = task_info.get('location')
+        if location:
+            work_id = name_to_task_id.get(base_name)
+            if work_id:
+                task_index = (work_id + 1) // 3
+                placement_id, work_id, retrieval_id = get_task_ids(int(task_index))
+                task_id_to_location[placement_id] = location
+                task_id_to_location[work_id] = location
+                task_id_to_location[retrieval_id] = location
+
+    def sort_key(task_id):
+        location = task_id_to_location.get(task_id)
+        order = location_order.get(location, float('inf'))
+        return (order, task_id)
+
+    sorted_task_ids = sorted(list(all_active_tasks), key=sort_key)
+
+    # 2. グラフ描画
     makespan = int(solver.objective_value)
     gantt_height = max(5, len(all_active_tasks) * 0.6)
     fig, ax = plt.subplots(figsize=(20, gantt_height))
 
-    # Adjust main plot area to make space for legends on the right
-    fig.subplots_adjust(left=0.15, right=0.8)
+    # 場所ラベルのスペースを確保するために左マージンを調整
+    fig.subplots_adjust(left=0.2, right=0.8)
 
     _plot_gantt_chart(
-        ax, solver, sorted(all_active_tasks), set(executed_tasks),
+        ax, solver, sorted_task_ids, set(executed_tasks),
         task_starts, task_durations, selected_recipes,
         task_id_to_name,
         task_name_to_required_caps,
         mode_to_resources_map,
         capability_color_map,
         resource_color_map,
-        input_data
+        input_data,
+        task_id_to_location  # 場所情報を描画関数に渡す
     )
 
     ax.set_xlabel("Time")
-    ax.set_xlim(-4, makespan + 5)
+    ax.set_xlim(-8, makespan + 5) # ラベル表示用に左側のリミットを調整
     ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=20))
 
-    # Remove old legend code and call the new custom legend drawer
     _draw_custom_legends(
         fig,
         capability_color_map,
@@ -826,6 +913,7 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
     """
     ### 変更 ###
     - `draw_capabilities`に渡すx座標の値を小さくし、楕円をテキスト側に寄せました。
+    - タスク名の横に場所(location)情報を表示するようにしました。
     """
     all_resources = input_data["resources"]["renewable"] + input_data["resources"]["reservoir"]
     all_capabilities = set(cap for res in all_resources for cap in res["capabilities"])
@@ -849,7 +937,12 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
 
     y_pos = line_count - 1
     for task in input_data["tasks"]:
-        ax.text(0.5, y_pos, f"TASK: {task['name']}", fontsize=14, fontweight='bold', va='center')
+        # ★ タスク名と場所を併記
+        task_display_name = f"TASK: {task['name']}"
+        if 'location' in task:
+            task_display_name += f"  @ {task['location']}"
+        ax.text(0.5, y_pos, task_display_name, fontsize=14, fontweight='bold', va='center')
+
         y_pos -= 1.2
         ax.text(1.0, y_pos, "Required:", fontsize=12, va='center')
 
@@ -1264,6 +1357,9 @@ def setup_rcpsp_problem(input_data: dict) -> (rcpsp_pb2.RcpspProblem, dict):
     入力データをRCPSP形式に変換し、ソルバー用の問題オブジェクトをセットアップします。
     """
     rcpsp_data_string, mode_to_resources_map = generate_rcpsp_max_from_json(input_data)
+    print("\n" + "="*25 + " RCPSP/max Data " + "="*25)
+    print(rcpsp_data_string)
+    print("="*66 + "\n")
 
     rcpsp_parser = rcpsp.RcpspParser()
     # withステートメントで一時ファイルを安全に扱う
@@ -1281,6 +1377,11 @@ def setup_rcpsp_problem(input_data: dict) -> (rcpsp_pb2.RcpspProblem, dict):
 def main(_):
     input_data = {
         "project_name": "TestTask",
+        "locations": [
+            {"name": "kitchen", "capacity": 2},
+            {"name": "entrance", "capacity": 1},
+            {"name": "room_center", "capacity": 1}
+        ],
         "resources": {
             "renewable": [
                 {"name": "r8_robot", "capacity": 1, "capabilities": ["arm", "camera", "gripper"]},
@@ -1295,12 +1396,12 @@ def main(_):
             ]
         },
         "tasks": [
-            {"name": "cooking", "duration": 30, "required_capabilities": ["arm", "camera", "gripper"]},
-            {"name": "IH", "duration": 20, "required_capabilities": ["arm", "camera", "temp"]},
-            {"name": "faucet", "duration": 25, "required_capabilities": ["arm", "gripper"]},
-            {"name": "fridge", "duration": 15, "required_capabilities": ["arm", "gripper"]},
-            {"name": "wall", "duration": 36, "required_capabilities": ["camera", "cleaner"]},
-            {"name": "table", "duration": 15, "required_capabilities": ["gripper", "cleaner"]}
+            {"name": "cooking", "duration": 30, "required_capabilities": ["arm", "camera", "gripper"], "location": "kitchen"},
+            {"name": "IH", "duration": 20, "required_capabilities": ["arm", "camera", "temp"], "location": "kitchen"},
+            {"name": "faucet", "duration": 25, "required_capabilities": ["arm", "gripper"], "location": "kitchen"},
+            {"name": "fridge", "duration": 15, "required_capabilities": ["arm", "gripper"], "location": "kitchen"},
+            {"name": "wall", "duration": 36, "required_capabilities": ["camera", "cleaner"], "location": "entrance"},
+            {"name": "table", "duration": 15, "required_capabilities": ["gripper", "cleaner"], "location": "room_center"}
         ]
     }
 
