@@ -543,14 +543,17 @@ def _get_base_task_name(task_name: str) -> str:
     return task_name
 
 
-def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_data):
-    """Capabilities、Resources、および凡例記号の凡例を図の右側に描画します。"""
-
+def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_data, show_symbols=True):
+    """
+    ### 変更 ###
+    凡例内の楕円サイズを微調整し、全体の見た目を統一
+    """
     # --- Capabilities Legend ---
     fig.text(0.83, 0.90, "Capabilities", fontsize=12, fontweight='bold')
     y_pos = 0.88
     for cap, color in capability_color_map.items():
-        ellipse = patches.Ellipse(xy=(0.835, y_pos), width=0.015, height=0.01,
+        # サイズを height=width にして正円に
+        ellipse = patches.Ellipse(xy=(0.835, y_pos), width=0.012, height=0.012,
                                   facecolor=color, edgecolor='black',
                                   transform=fig.transFigure, figure=fig)
         fig.patches.append(ellipse)
@@ -576,26 +579,23 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
         x_pos_cap = 0.92
         for cap in res["capabilities"]:
             cap_color = capability_color_map.get(cap, "grey")
-            circle = patches.Circle((x_pos_cap, y_pos),
-                                    radius=0.005,
-                                    facecolor=cap_color, edgecolor="black",
-                                    linewidth=0.5,
+            # CircleをEllipseに変更し、サイズを統一
+            ellipse = patches.Ellipse((x_pos_cap, y_pos), width=0.01, height=0.01,
+                                    facecolor=cap_color, edgecolor="black", linewidth=0.5,
                                     transform=fig.transFigure, figure=fig)
-            fig.patches.append(circle)
+            fig.patches.append(ellipse)
             x_pos_cap += 0.012
-
         y_pos -= 0.045
 
-    # --- 凡例記号 (Symbols) Legend ---
-    y_pos -= 0.01
-    fig.text(0.83, y_pos, "Symbols", fontsize=12, fontweight='bold')
-    y_pos -= 0.035
-
-    # 斜線ハッチングの説明を追加
-    fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.0075), 0.01, 0.015,
-                                      facecolor='lightgrey', edgecolor='black', hatch='//',
-                                      transform=fig.transFigure, figure=fig)])
-    fig.text(0.85, y_pos, "Robot-led Placement / Retrieval", fontsize=9, va='center')
+    # --- Symbols Legend (if requested) ---
+    if show_symbols:
+        y_pos -= 0.01
+        fig.text(0.83, y_pos, "Symbols", fontsize=12, fontweight='bold')
+        y_pos -= 0.035
+        fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.0075), 0.01, 0.015,
+                                          facecolor='lightgrey', edgecolor='black', hatch='//',
+                                          transform=fig.transFigure, figure=fig)])
+        fig.text(0.85, y_pos, "Robot-led Placement / Retrieval", fontsize=9, va='center')
 
 
 def _plot_gantt_chart(
@@ -783,50 +783,59 @@ def calculate_all_task_combinations(input_data):
     return all_task_combinations
 
 
-def draw_capabilities(ax, capabilities, x_start, y_pos, cap_color_map, patch_size=0.6, patch_margin=0.1):
-    """ ### 変更 ### Capabilityを表現する図形を四角から楕円に変更 """
+def draw_capabilities(ax, capabilities, x_start, y_pos, cap_color_map, patch_size=0.6, patch_margin=0.1, aspect_correction=1.0):
+    """
+    グラフのアスペクト比による歪みを補正する`aspect_correction`引数を追加。
+    楕円の幅(width)をこの値で割ることで、表示上は正円に見えるように調整します。
+    """
     sorted_caps = sorted(list(capabilities))
     for i, cap in enumerate(sorted_caps):
         if cap in cap_color_map:
-            # 中心のx座標を計算
-            center_x = x_start + i * (patch_size + patch_margin) + patch_size / 2
-            # RectangleをEllipseに変更
+            center_x = x_start + i * (patch_size * 0.3 + patch_margin) + patch_size / 2
             ellipse = patches.Ellipse(
                 (center_x, y_pos),
-                width=patch_size, height=patch_size,
+                width=patch_size / aspect_correction,  # 横方向の歪みを補正
+                height=patch_size,
                 facecolor=cap_color_map[cap],
                 edgecolor='gray'
             )
             ax.add_patch(ellipse)
 
 
-def visualize_task_combinations(input_data, calculated_combinations, cap_color_map):
+def visualize_task_combinations(input_data, calculated_combinations, cap_color_map, resource_color_map):
     """
     ### 変更 ###
-    タスク、要求Capability、そしてそれを実行可能なリソースの組み合わせを可視化します。
-    Capabilityの色は外部から与えられたcap_color_mapを使用します。
+    - `draw_capabilities`に渡すx座標の値を小さくし、楕円をテキスト側に寄せました。
     """
     all_resources = input_data["resources"]["renewable"] + input_data["resources"]["reservoir"]
     all_capabilities = set(cap for res in all_resources for cap in res["capabilities"])
     sorted_caps = sorted(list(all_capabilities))
 
-    # プロットエリアの準備 (変更なし)
     line_count = sum(2.5 + sum(len(combo) + 0.5 for combo in calculated_combinations[task['name']]) + 1.5
                      for task in input_data["tasks"])
 
     fig, ax = plt.subplots(figsize=(14, line_count * 0.4))
+
     ax.set_xlim(0, 10)
     ax.set_ylim(0, line_count)
     ax.axis('off')
-    fig.suptitle("Task Assignment Options", fontsize=16, fontweight='bold')
-    y_pos = line_count - 1
 
-    # 各タスクの情報を描画 (変更なし)
+    fig.suptitle("Task Assignment Options", fontsize=16, fontweight='bold')
+
+    x_range = ax.get_xlim()[1] - ax.get_xlim()[0]
+    y_range = ax.get_ylim()[1] - ax.get_ylim()[0]
+    fig_width, fig_height = fig.get_size_inches()
+    aspect_correction = (y_range / fig_height) / (x_range / fig_width) * 1.4
+
+    y_pos = line_count - 1
     for task in input_data["tasks"]:
         ax.text(0.5, y_pos, f"TASK: {task['name']}", fontsize=14, fontweight='bold', va='center')
         y_pos -= 1.2
         ax.text(1.0, y_pos, "Required:", fontsize=12, va='center')
-        draw_capabilities(ax, task['required_capabilities'], 2.5, y_pos, cap_color_map)
+
+        ### ここの '2.5' を '2.0' に変更 ###
+        draw_capabilities(ax, task['required_capabilities'], 2.0, y_pos, cap_color_map, aspect_correction=aspect_correction)
+
         y_pos -= 1.5
         combinations_for_task = calculated_combinations[task['name']]
         for i, combo in enumerate(combinations_for_task):
@@ -836,7 +845,8 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
                 ax.text(2.0, y_pos, f"• {resource_name}", fontsize=11, va='center')
                 resource_data = next((r for r in all_resources if r["name"] == resource_name), None)
                 if resource_data:
-                    draw_capabilities(ax, resource_data['capabilities'], 4.5, y_pos, cap_color_map)
+                    ### ここの '4.5' を '3.8' に変更 ###
+                    draw_capabilities(ax, resource_data['capabilities'], 3.8, y_pos, cap_color_map, aspect_correction=aspect_correction)
                 y_pos -= 1
             y_pos -= 0.5
         y_pos += 1
@@ -844,21 +854,13 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
              ax.hlines(y=y_pos, xmin=0.5, xmax=9.5, colors='lightgray', linestyles='--')
         y_pos -= 2
 
-    # 凡例を図の右側に縦に描画 (RectangleをEllipseに変更)
-    legend_ax = fig.add_axes([0.82, 0.15, 0.15, 0.7])
-    legend_ax.axis('off')
-    legend_ax.set_title("Capabilities", fontsize=12, fontweight='bold', pad=10)
-    item_height = 1.0 / (len(sorted_caps) + 1)
-    patch_size = item_height * 0.6
-    for i, cap in enumerate(sorted_caps):
-        y = 0.95 - (i * item_height)
-        # ここもEllipseに変更
-        ellipse = patches.Ellipse(
-            (0.05 + patch_size / 2, y), patch_size, patch_size,
-            facecolor=cap_color_map[cap], edgecolor='gray'
-        )
-        legend_ax.add_patch(ellipse)
-        legend_ax.text(0.1 + patch_size, y, cap, fontsize=11, va='center')
+    _draw_custom_legends(
+        fig,
+        cap_color_map,
+        resource_color_map,
+        input_data,
+        show_symbols=False
+    )
     fig.subplots_adjust(right=0.8, top=0.92)
     plt.show()
 
@@ -909,6 +911,13 @@ def _process_and_display_solution(
         mode_to_resources_map=mode_to_resources_map,
     )
 
+    irreducible_combinations = calculate_all_task_combinations(input_data)
+    visualize_task_combinations(
+        input_data,
+        irreducible_combinations,
+        capability_color_map,
+        resource_color_map)
+
     visualize_schedule_only(
         solver,
         all_active_tasks, executed_tasks, task_starts,
@@ -920,8 +929,6 @@ def _process_and_display_solution(
         resource_color_map,
         input_data=input_data
     )
-    irreducible_combinations = calculate_all_task_combinations(input_data)
-    visualize_task_combinations(input_data, irreducible_combinations, capability_color_map)
 
 
 def solve_rcpsp(
