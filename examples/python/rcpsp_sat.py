@@ -312,7 +312,6 @@ def create_name_mappings(input_data: dict) -> (dict, dict):
         task_name = tasks[n - 1]['name']
         placement_id, work_id, retrieval_id = get_task_ids(n)
 
-        ### MODIFICATION ###
         # Unify terminology from Pre/Post to Placement/Retrieval
         task_id_to_name[placement_id] = f"Placement-{task_name}"
         task_id_to_name[work_id] = f"{task_name}"
@@ -537,7 +536,6 @@ def print_schedule_by_time_step(
 # --- Visualization Functions ---
 def _get_base_task_name(task_name: str) -> str:
     """ Extracts 'kitchen' from 'Placement-kitchen' or 'Retrieval-kitchen' """
-    ### MODIFICATION ###
     if task_name.startswith("Placement-") or task_name.startswith("Retrieval-"):
         return "-".join(task_name.split("-")[1:])
     return task_name
@@ -579,7 +577,6 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
         x_pos_cap = 0.92
         for cap in res["capabilities"]:
             cap_color = capability_color_map.get(cap, "grey")
-            # CircleをEllipseに変更し、サイズを統一
             ellipse = patches.Ellipse((x_pos_cap, y_pos), width=0.01, height=0.01,
                                     facecolor=cap_color, edgecolor="black", linewidth=0.5,
                                     transform=fig.transFigure, figure=fig)
@@ -587,7 +584,6 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
             x_pos_cap += 0.012
         y_pos -= 0.045
 
-    # --- Symbols Legend (if requested) ---
     if show_symbols:
         y_pos -= 0.01
         fig.text(0.83, y_pos, "Symbols", fontsize=12, fontweight='bold')
@@ -637,7 +633,6 @@ def _plot_gantt_chart(
             if base_task_name in task_name_to_required_caps:
                 required_caps = sorted(task_name_to_required_caps[base_task_name])
 
-                # --- ★ここから修正 ---
                 num_caps = len(required_caps)
                 # 複数のCapabilityをタスク行の中心(i)周りに均等に配置するための開始Y座標を計算
                 start_y = i - (num_caps - 1) * 0.15
@@ -657,7 +652,6 @@ def _plot_gantt_chart(
                         clip_on=False
                     )
                     ax.add_patch(ellipse)
-                # --- ★修正ここまで ---
 
         # 2. タスクバーを描画
         if t in executed_tasks and t in selected_recipes:
@@ -846,7 +840,6 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
         y_pos -= 1.2
         ax.text(1.0, y_pos, "Required:", fontsize=12, va='center')
 
-        ### ここの '2.5' を '2.0' に変更 ###
         draw_capabilities(ax, task['required_capabilities'], 2.0, y_pos, cap_color_map, aspect_correction=aspect_correction)
 
         y_pos -= 1.5
@@ -858,7 +851,6 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
                 ax.text(2.0, y_pos, f"• {resource_name}", fontsize=11, va='center')
                 resource_data = next((r for r in all_resources if r["name"] == resource_name), None)
                 if resource_data:
-                    ### ここの '4.5' を '3.8' に変更 ###
                     draw_capabilities(ax, resource_data['capabilities'], 3.8, y_pos, cap_color_map, aspect_correction=aspect_correction)
                 y_pos -= 1
             y_pos -= 0.5
@@ -1221,6 +1213,58 @@ def solve_rcpsp(
     return status, results
 
 
+def create_color_maps(input_data: dict) -> (dict, dict):
+    """
+    入力データに基づいて、リソースとケイパビリティのカラーマップを生成します。
+    - Renewable Resources: 青系の同系色で統一感を出す
+    - Reservoir Resources: 主役の情報なので、鮮やかで区別しやすい 'tab10' を割り当て
+    - Capabilities: 補助情報なので、ソフトな 'Set3' を割り当て
+    """
+    renewable_names = [r['name'] for r in input_data["resources"]["renewable"]]
+    reservoir_names = [r['name'] for r in input_data["resources"]["reservoir"]]
+    resource_color_map = {}
+
+    if renewable_names:
+        renewable_cmap = cm.get_cmap('Blues')
+        points = np.linspace(0.4, 0.9, len(renewable_names))
+        colors = renewable_cmap(points)
+        for name, color in zip(renewable_names, colors):
+            resource_color_map[name] = color
+    if reservoir_names:
+        reservoir_cmap = cm.get_cmap('tab10')
+        colors = [reservoir_cmap((i + 1) % 10) for i in range(len(reservoir_names))]
+        for name, color in zip(reservoir_names, colors):
+            resource_color_map[name] = color
+    all_caps_set = set(cap for task in input_data["tasks"] for cap in task["required_capabilities"])
+    for res_type in ["renewable", "reservoir"]:
+        for res in input_data["resources"][res_type]:
+            all_caps_set.update(res["capabilities"])
+
+    all_caps = sorted(list(all_caps_set))
+    capability_cmap = cm.get_cmap('Set3')
+    capability_color_map = {cap: capability_cmap(i % 12) for i, cap in enumerate(all_caps)}
+
+    return resource_color_map, capability_color_map
+
+def setup_rcpsp_problem(input_data: dict) -> (rcpsp_pb2.RcpspProblem, dict):
+    """
+    入力データをRCPSP形式に変換し、ソルバー用の問題オブジェクトをセットアップします。
+    """
+    rcpsp_data_string, mode_to_resources_map = generate_rcpsp_max_from_json(input_data)
+
+    rcpsp_parser = rcpsp.RcpspParser()
+    # withステートメントで一時ファイルを安全に扱う
+    with tempfile.NamedTemporaryFile(mode='w+', delete=True, suffix='.sch') as temp_f:
+        temp_f.write(rcpsp_data_string)
+        temp_f.seek(0) # 書き込み後にファイルポインタを先頭に戻す
+        rcpsp_parser.parse_file(temp_f.name)
+
+    problem = rcpsp_parser.problem()
+    print_problem_statistics(problem)
+
+    return problem, mode_to_resources_map
+
+
 def main(_):
     input_data = {
         "project_name": "TestTask",
@@ -1247,69 +1291,21 @@ def main(_):
         ]
     }
 
-    num_actual_robots = len(input_data["resources"]["renewable"])
-    num_actual_modules = len(input_data["resources"]["reservoir"])
-
+    # --- 1. データ準備 ---
     task_id_to_name, mode_to_name = create_name_mappings(input_data)
     renewable_id_to_name, reservoir_id_to_name = create_resource_name_mappings(input_data)
-
-    all_caps_set = set()
-    for task in input_data["tasks"]:
-        all_caps_set.update(task["required_capabilities"])
-    for res_type in ["renewable", "reservoir"]:
-        for res in input_data["resources"][res_type]:
-            all_caps_set.update(res["capabilities"])
-    all_caps = sorted(list(all_caps_set))
-
-    # 1. input_dataからリソース名を種類ごとにリスト化
-    renewable_names = [r['name'] for r in input_data["resources"]["renewable"]]
-    reservoir_names = [r['name'] for r in input_data["resources"]["reservoir"]]
-
-    # 最終的なカラーマップ辞書を初期化
-    resource_color_map = {}
-
-    # 2. Renewable Resources の色を定義 (青系の近い色)
-    if renewable_names:
-        n_renewable = len(renewable_names)
-        # 'Blues'のような連続的カラーマップを選択
-        renewable_cmap = cm.get_cmap('Blues')
-        # マップの中間〜濃い部分から、近い色合いをn個取得
-        renewable_points = np.linspace(0.4, 0.9, n_renewable)
-        renewable_colors = renewable_cmap(renewable_points)
-        # 辞書に登録
-        for name, color in zip(renewable_names, renewable_colors):
-            resource_color_map[name] = color
-
-    # 3. Reservoir Resources の色を定義 (青から離れた、ばらつきのある色)
-    if reservoir_names:
-        n_reservoir = len(reservoir_names)
-        # Resources (主役) には、鮮やかな 'tab10' を割り当て
-        # tab10の最初の色は青なので、2番目のオレンジから使うようにインデックスをずらす
-        reservoir_cmap = cm.get_cmap('tab10')
-        reservoir_colors = [reservoir_cmap((i + 1) % 10) for i in range(n_reservoir)]
-        # 辞書に登録
-        for name, color in zip(reservoir_names, reservoir_colors):
-            resource_color_map[name] = color
-
-    # Capabilities (補助情報) には、ソフト（パステル調）な 'Set3' を割り当て
-    all_caps = sorted(list(all_caps_set))
-    cap_colors = cm.get_cmap('Set3')
-    capability_color_map = {cap: cap_colors(i % 12) for i, cap in enumerate(all_caps)}
-
     task_name_to_required_caps = {task['name']: task['required_capabilities'] for task in input_data['tasks']}
 
-    rcpsp_data_string, mode_to_resources_map = generate_rcpsp_max_from_json(input_data)
+    # 色設定を専用関数で実行
+    resource_color_map, capability_color_map = create_color_maps(input_data)
 
-    rcpsp_parser = rcpsp.RcpspParser()
-    with tempfile.NamedTemporaryFile(mode='w+', delete=True, suffix='.sch') as temp_f:
-        temp_f.write(rcpsp_data_string)
-        temp_f.flush()
-        rcpsp_parser.parse_file(temp_f.name)
-    problem = rcpsp_parser.problem()
-    print_problem_statistics(problem)
+    # --- 2. 問題の構築 ---
+    # RCPSP問題のセットアップを専用関数で実行
+    problem, mode_to_resources_map = setup_rcpsp_problem(input_data)
 
+    # --- 3. ソルバーの実行 ---
+    num_actual_robots = len(input_data["resources"]["renewable"])
     last_task = len(problem.tasks) - 1
-
     status, results = solve_rcpsp(
         problem=problem, proto_file=_OUTPUT_PROTO.value, params=_PARAMS.value,
         active_tasks=set(range(1, last_task)),
@@ -1318,7 +1314,9 @@ def main(_):
         num_actual_robots=num_actual_robots
     )
 
-    if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+    # --- 4. 結果の表示 ---
+    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        num_actual_modules = len(input_data["resources"]["reservoir"])
         _process_and_display_solution(
             project_name=input_data["project_name"],
             task_id_to_name=task_id_to_name,
