@@ -544,13 +544,12 @@ def _get_base_task_name(task_name: str) -> str:
 
 
 def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_data):
-    """CapabilitiesとResourcesの凡例を、図の右側に詳細付きで描画します。"""
+    """Capabilities、Resources、および凡例記号の凡例を図の右側に描画します。"""
 
     # --- Capabilities Legend ---
     fig.text(0.83, 0.90, "Capabilities", fontsize=12, fontweight='bold')
     y_pos = 0.88
     for cap, color in capability_color_map.items():
-        # 四角形から楕円に変更
         ellipse = patches.Ellipse(xy=(0.835, y_pos), width=0.015, height=0.01,
                                   facecolor=color, edgecolor='black',
                                   transform=fig.transFigure, figure=fig)
@@ -566,14 +565,14 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
     for res in all_resources:
         res_name = res["name"]
         res_color = resource_color_map.get(res_name, "grey")
+        capacity = res["capacity"]
 
-        # Resource color patch and name
-        fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.01), 0.01, 0.015,
+        fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.015), 0.01, 0.02,
                                           facecolor=res_color, edgecolor='black',
                                           transform=fig.transFigure, figure=fig)])
         fig.text(0.85, y_pos, res_name, fontsize=10, va='center')
+        fig.text(0.85, y_pos - 0.015, f"(Cap: {capacity})", fontsize=8, color='dimgray', va='center')
 
-        # Capability circles next to the name
         x_pos_cap = 0.92
         for cap in res["capabilities"]:
             cap_color = capability_color_map.get(cap, "grey")
@@ -585,7 +584,18 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
             fig.patches.append(circle)
             x_pos_cap += 0.012
 
-        y_pos -= 0.035
+        y_pos -= 0.045
+
+    # --- 凡例記号 (Symbols) Legend ---
+    y_pos -= 0.01
+    fig.text(0.83, y_pos, "Symbols", fontsize=12, fontweight='bold')
+    y_pos -= 0.035
+
+    # 斜線ハッチングの説明を追加
+    fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.0075), 0.01, 0.015,
+                                      facecolor='lightgrey', edgecolor='black', hatch='//',
+                                      transform=fig.transFigure, figure=fig)])
+    fig.text(0.85, y_pos, "Robot-led Placement / Retrieval", fontsize=9, va='center')
 
 
 def _plot_gantt_chart(
@@ -734,6 +744,125 @@ def visualize_schedule_only(
 
     plt.show()
 
+
+def calculate_all_task_combinations(input_data):
+    """
+    input_dataを受け取り、各タスクの要求を満たす「既約」な
+    リソースの組み合わせを全パターン計算して返します。
+    """
+    def _find_irreducible_covers(required_caps, available_resources):
+        if not required_caps: return [[]]
+        all_valid_covers = []
+        for i in range(1, len(available_resources) + 1):
+            for combo in combinations(available_resources, i):
+                combined_caps = set(c for res in combo for c in res["capabilities"])
+                if required_caps.issubset(combined_caps):
+                    all_valid_covers.append(list(combo))
+
+        irreducible_solutions = []
+        for combo in all_valid_covers:
+            is_irreducible = True
+            if len(combo) > 1:
+                for sub_combo in combinations(combo, len(combo) - 1):
+                    sub_caps = set(c for res in sub_combo for c in res["capabilities"])
+                    if required_caps.issubset(sub_caps):
+                        is_irreducible = False
+                        break
+            if is_irreducible:
+                solution_names = sorted([res["name"] for res in combo])
+                if solution_names not in irreducible_solutions:
+                    irreducible_solutions.append(solution_names)
+        return irreducible_solutions
+
+    all_resources = input_data["resources"]["renewable"] + input_data["resources"]["reservoir"]
+    all_task_combinations = {}
+    for task in input_data["tasks"]:
+        task_name, required_capabilities = task["name"], set(task["required_capabilities"])
+        combinations_for_task = _find_irreducible_covers(required_capabilities, all_resources)
+        all_task_combinations[task_name] = combinations_for_task
+    return all_task_combinations
+
+
+def draw_capabilities(ax, capabilities, x_start, y_pos, cap_color_map, patch_size=0.6, patch_margin=0.1):
+    """ ### 変更 ### Capabilityを表現する図形を四角から楕円に変更 """
+    sorted_caps = sorted(list(capabilities))
+    for i, cap in enumerate(sorted_caps):
+        if cap in cap_color_map:
+            # 中心のx座標を計算
+            center_x = x_start + i * (patch_size + patch_margin) + patch_size / 2
+            # RectangleをEllipseに変更
+            ellipse = patches.Ellipse(
+                (center_x, y_pos),
+                width=patch_size, height=patch_size,
+                facecolor=cap_color_map[cap],
+                edgecolor='gray'
+            )
+            ax.add_patch(ellipse)
+
+
+def visualize_task_combinations(input_data, calculated_combinations, cap_color_map):
+    """
+    ### 変更 ###
+    タスク、要求Capability、そしてそれを実行可能なリソースの組み合わせを可視化します。
+    Capabilityの色は外部から与えられたcap_color_mapを使用します。
+    """
+    all_resources = input_data["resources"]["renewable"] + input_data["resources"]["reservoir"]
+    all_capabilities = set(cap for res in all_resources for cap in res["capabilities"])
+    sorted_caps = sorted(list(all_capabilities))
+
+    # プロットエリアの準備 (変更なし)
+    line_count = sum(2.5 + sum(len(combo) + 0.5 for combo in calculated_combinations[task['name']]) + 1.5
+                     for task in input_data["tasks"])
+
+    fig, ax = plt.subplots(figsize=(14, line_count * 0.4))
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, line_count)
+    ax.axis('off')
+    fig.suptitle("Task Assignment Options", fontsize=16, fontweight='bold')
+    y_pos = line_count - 1
+
+    # 各タスクの情報を描画 (変更なし)
+    for task in input_data["tasks"]:
+        ax.text(0.5, y_pos, f"TASK: {task['name']}", fontsize=14, fontweight='bold', va='center')
+        y_pos -= 1.2
+        ax.text(1.0, y_pos, "Required:", fontsize=12, va='center')
+        draw_capabilities(ax, task['required_capabilities'], 2.5, y_pos, cap_color_map)
+        y_pos -= 1.5
+        combinations_for_task = calculated_combinations[task['name']]
+        for i, combo in enumerate(combinations_for_task):
+            ax.text(1.5, y_pos, f"Solution {i+1}", fontsize=12, va='center', style='italic', color='navy')
+            y_pos -= 1
+            for resource_name in combo:
+                ax.text(2.0, y_pos, f"• {resource_name}", fontsize=11, va='center')
+                resource_data = next((r for r in all_resources if r["name"] == resource_name), None)
+                if resource_data:
+                    draw_capabilities(ax, resource_data['capabilities'], 4.5, y_pos, cap_color_map)
+                y_pos -= 1
+            y_pos -= 0.5
+        y_pos += 1
+        if task != input_data["tasks"][-1]:
+             ax.hlines(y=y_pos, xmin=0.5, xmax=9.5, colors='lightgray', linestyles='--')
+        y_pos -= 2
+
+    # 凡例を図の右側に縦に描画 (RectangleをEllipseに変更)
+    legend_ax = fig.add_axes([0.82, 0.15, 0.15, 0.7])
+    legend_ax.axis('off')
+    legend_ax.set_title("Capabilities", fontsize=12, fontweight='bold', pad=10)
+    item_height = 1.0 / (len(sorted_caps) + 1)
+    patch_size = item_height * 0.6
+    for i, cap in enumerate(sorted_caps):
+        y = 0.95 - (i * item_height)
+        # ここもEllipseに変更
+        ellipse = patches.Ellipse(
+            (0.05 + patch_size / 2, y), patch_size, patch_size,
+            facecolor=cap_color_map[cap], edgecolor='gray'
+        )
+        legend_ax.add_patch(ellipse)
+        legend_ax.text(0.1 + patch_size, y, cap, fontsize=11, va='center')
+    fig.subplots_adjust(right=0.8, top=0.92)
+    plt.show()
+
+
 def _process_and_display_solution(
     solver, problem,
     all_active_tasks, all_resources, source, sink,
@@ -791,6 +920,8 @@ def _process_and_display_solution(
         resource_color_map,
         input_data=input_data
     )
+    irreducible_combinations = calculate_all_task_combinations(input_data)
+    visualize_task_combinations(input_data, irreducible_combinations, capability_color_map)
 
 
 def solve_rcpsp(
@@ -1080,7 +1211,7 @@ def main(_):
             ],
             "reservoir": [
                 {"name": "arm_module", "capacity": 1, "capabilities": ["arm", "camera", "cleaner"]},
-                {"name": "temperature_sensor_module", "capacity": 1, "capabilities": ["temperature_sensor"]},
+                {"name": "temp_module", "capacity": 1, "capabilities": ["temp"]},
                 {"name": "camera_module", "capacity": 1, "capabilities": ["camera"]},
                 {"name": "gripper_module", "capacity": 1, "capabilities": ["gripper"]},
                 {"name": "cleaner_module", "capacity": 1, "capabilities": ["cleaner"]}
@@ -1088,7 +1219,7 @@ def main(_):
         },
         "tasks": [
             {"name": "kitchen", "duration": 30, "required_capabilities": ["arm", "camera", "gripper"]},
-            {"name": "IH", "duration": 20, "required_capabilities": ["arm", "camera", "temperature_sensor"]},
+            {"name": "IH", "duration": 20, "required_capabilities": ["arm", "camera", "temp"]},
             {"name": "faucet", "duration": 25, "required_capabilities": ["arm", "gripper"]},
             {"name": "fridge", "duration": 15, "required_capabilities": ["arm", "gripper"]},
             {"name": "wall", "duration": 36, "required_capabilities": ["camera", "cleaner"]},
