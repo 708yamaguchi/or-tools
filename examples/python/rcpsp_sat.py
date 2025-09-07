@@ -1486,7 +1486,7 @@ def main(_):
 
     # Nakane
     input_data = {
-        "project_name": "TestTask",
+        "project_name": "Restaurant",
         "locations": [
             {"name": "kitchen", "max_robots": 2},
             {"name": "entrance", "max_robots": 1},
@@ -1496,7 +1496,6 @@ def main(_):
         "resources": {
             "robot": [
                 {"name": "r8_robot", "quantity": 1, "capabilities": ["arm", "camera", "gripper", "serve"]},
-                # {"name": "pr2_robot", "quantity": 2, "capabilities": ["camera", "arm", "serve"]},
             ],
             "module": [
                 {"name": "arm_module", "quantity": 4, "capabilities": ["arm", "camera", "cleaner"]},
