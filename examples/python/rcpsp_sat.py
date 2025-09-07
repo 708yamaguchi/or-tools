@@ -100,11 +100,11 @@ def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=Fals
     tasks = input_data.get('tasks', [])
     N = len(tasks)
 
-    actual_robots = input_data['resources']['renewable']
+    actual_robots = input_data['resources']['robot']
     num_actual_robots = len(actual_robots)
     robot_map = {res['name']: i for i, res in enumerate(actual_robots)}
 
-    actual_modules = input_data['resources']['reservoir']
+    actual_modules = input_data['resources']['module']
     num_actual_modules = len(actual_modules)
     module_map = {res['name']: i for i, res in enumerate(actual_modules)}
 
@@ -354,9 +354,9 @@ def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=Fals
                 output_lines.append(f" {mode_num} {cost_for_mode} {demands_str}")
 
     # リソース容量定義ブロック
-    robot_caps = [res['capacity'] for res in actual_robots]
-    module_renewable_caps = [res['capacity'] for res in actual_modules]
-    location_caps = [loc['capacity'] for loc in locations]
+    robot_caps = [res['quantity'] for res in actual_robots]
+    module_renewable_caps = [res['quantity'] for res in actual_modules]
+    location_caps = [loc['max_robots'] for loc in locations]
     renewable_caps = robot_caps + module_renewable_caps + location_caps
     reservoir_caps = module_renewable_caps
 
@@ -400,9 +400,9 @@ def create_resource_name_mappings(input_data):
     resources = input_data.get('resources', {})
     locations = input_data.get('locations', [])
 
-    renewable_resources = resources.get('renewable', []) # Robots
+    renewable_resources = resources.get('robot', []) # Robots
     num_actual_robots = len(renewable_resources)
-    reservoir_resources = resources.get('reservoir', []) # Modules
+    reservoir_resources = resources.get('module', []) # Modules
     num_actual_modules = len(reservoir_resources)
 
     # 1. Renewable Resources のマッピング
@@ -637,10 +637,10 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
     # 1. Robots (Renewable) のセクション
     fig.text(0.83, y_pos, "Robots", fontsize=10, fontweight='bold', style='italic', color='dimgray')
     y_pos -= 0.035
-    for res in input_data["resources"]["renewable"]:
+    for res in input_data["resources"]["robot"]:
         res_name = res["name"]
         res_color = resource_color_map.get(res_name, "grey")
-        capacity = res["capacity"]
+        capacity = res["quantity"]
 
         fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.015), 0.01, 0.02,
                                           facecolor=res_color, edgecolor='black',
@@ -664,10 +664,10 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
     # 2. Modules (Reservoir) のセクション
     fig.text(0.83, y_pos, "Modules", fontsize=10, fontweight='bold', style='italic', color='dimgray')
     y_pos -= 0.035
-    for res in input_data["resources"]["reservoir"]:
+    for res in input_data["resources"]["module"]:
         res_name = res["name"]
         res_color = resource_color_map.get(res_name, "grey")
-        capacity = res["capacity"]
+        capacity = res["quantity"]
 
         fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.015), 0.01, 0.02,
                                           facecolor=res_color, edgecolor='black',
@@ -711,8 +711,8 @@ def _plot_gantt_chart(
     y_labels = [task_id_to_name.get(t, f"Task {t}") for t in all_task_ids]
 
     # --- 描画のための準備 ---
-    robot_names = {r['name'] for r in input_data["resources"]["renewable"]}
-    module_names = {r['name'] for r in input_data["resources"]["reservoir"]}
+    robot_names = {r['name'] for r in input_data["resources"]["robot"]}
+    module_names = {r['name'] for r in input_data["resources"]["module"]}
 
     # --- 階層構造を持つY軸ラベルを生成 ---
     new_y_labels = []
@@ -759,7 +759,7 @@ def _plot_gantt_chart(
             if info:
                 # ラベルのY座標を領域の下端に設定
                 y_pos_bottom = y_range['end'] + 0.35
-                label = f"{info['name'].upper()} (Cap: {info['capacity']})"
+                label = f"{info['name'].upper()} (Cap: {info['max_robots']})"
                 ax.text(-7, y_pos_bottom, label,
                         va='bottom',  # 垂直方向の配置基準を 'bottom' に変更
                         ha='left',
@@ -952,7 +952,7 @@ def calculate_all_task_combinations(input_data):
                     irreducible_solutions.append(solution_names)
         return irreducible_solutions
 
-    all_resources = input_data["resources"]["renewable"] + input_data["resources"]["reservoir"]
+    all_resources = input_data["resources"]["robot"] + input_data["resources"]["module"]
     all_task_combinations = {}
 
     for task in input_data["tasks"]:
@@ -992,7 +992,7 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
     - `draw_capabilities`に渡すx座標の値を小さくし、楕円をテキスト側に寄せました。
     - タスク名の横に場所(location)情報を表示するようにしました。
     """
-    all_resources = input_data["resources"]["renewable"] + input_data["resources"]["reservoir"]
+    all_resources = input_data["resources"]["robot"] + input_data["resources"]["module"]
     all_capabilities = set(cap for res in all_resources for cap in res["capabilities"])
     sorted_caps = sorted(list(all_capabilities))
 
@@ -1403,8 +1403,8 @@ def create_color_maps(input_data: dict) -> (dict, dict):
     - Reservoir Resources: 主役の情報なので、鮮やかで区別しやすい 'tab10' を割り当て
     - Capabilities: 補助情報なので、ソフトな 'Set3' を割り当て
     """
-    renewable_names = [r['name'] for r in input_data["resources"]["renewable"]]
-    reservoir_names = [r['name'] for r in input_data["resources"]["reservoir"]]
+    renewable_names = [r['name'] for r in input_data["resources"]["robot"]]
+    reservoir_names = [r['name'] for r in input_data["resources"]["module"]]
     resource_color_map = {}
 
     if renewable_names:
@@ -1419,7 +1419,7 @@ def create_color_maps(input_data: dict) -> (dict, dict):
         for name, color in zip(reservoir_names, colors):
             resource_color_map[name] = color
     all_caps_set = set(cap for task in input_data["tasks"] for cap in task["required_capabilities"])
-    for res_type in ["renewable", "reservoir"]:
+    for res_type in ["robot", "module"]:
         for res in input_data["resources"][res_type]:
             all_caps_set.update(res["capabilities"])
 
@@ -1456,21 +1456,21 @@ def main(_):
     input_data = {
         "project_name": "TestTask",
         "locations": [
-            {"name": "kitchen", "capacity": 2},
-            {"name": "entrance", "capacity": 1},
-            {"name": "room_center", "capacity": 1}
+            {"name": "kitchen", "max_robots": 2},
+            {"name": "entrance", "max_robots": 1},
+            {"name": "room_center", "max_robots": 1}
         ],
         "resources": {
-            "renewable": [
-                {"name": "r8_robot", "capacity": 1, "capabilities": ["arm", "camera", "gripper"]},
-                {"name": "pr2_robot", "capacity": 2, "capabilities": ["camera", "arm"]},
+            "robot": [
+                {"name": "r8_robot", "quantity": 1, "capabilities": ["arm", "camera", "gripper"]},
+                {"name": "pr2_robot", "quantity": 2, "capabilities": ["camera", "arm"]},
             ],
-            "reservoir": [
-                {"name": "arm_module", "capacity": 3, "capabilities": ["arm", "camera", "cleaner"]},
-                {"name": "temp_module", "capacity": 1, "capabilities": ["temp"]},
-                {"name": "camera_module", "capacity": 1, "capabilities": ["camera"]},
-                {"name": "gripper_module", "capacity": 1, "capabilities": ["gripper"]},
-                {"name": "cleaner_module", "capacity": 1, "capabilities": ["cleaner"]}
+            "module": [
+                {"name": "arm_module", "quantity": 3, "capabilities": ["arm", "camera", "cleaner"]},
+                {"name": "temp_module", "quantity": 1, "capabilities": ["temp"]},
+                {"name": "camera_module", "quantity": 1, "capabilities": ["camera"]},
+                {"name": "gripper_module", "quantity": 1, "capabilities": ["gripper"]},
+                {"name": "cleaner_module", "quantity": 1, "capabilities": ["cleaner"]}
             ]
         },
         "tasks": [
@@ -1502,7 +1502,7 @@ def main(_):
     problem, mode_to_resources_map = setup_rcpsp_problem(input_data, irreducible_combinations)
 
     # --- 3. ソルバーの実行 ---
-    num_actual_robots = len(input_data["resources"]["renewable"])
+    num_actual_robots = len(input_data["resources"]["robot"])
     last_task = len(problem.tasks) - 1
     status, results = solve_rcpsp(
         problem=problem, proto_file=_OUTPUT_PROTO.value, params=_PARAMS.value,
@@ -1514,7 +1514,7 @@ def main(_):
 
     # --- 4. 結果の表示 ---
     if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        num_actual_modules = len(input_data["resources"]["reservoir"])
+        num_actual_modules = len(input_data["resources"]["module"])
         _process_and_display_solution(
             project_name=input_data["project_name"],
             task_id_to_name=task_id_to_name,
