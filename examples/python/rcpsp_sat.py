@@ -646,7 +646,7 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
                                           facecolor=res_color, edgecolor='black',
                                           transform=fig.transFigure, figure=fig)])
         fig.text(0.85, y_pos, res_name, fontsize=10, va='center')
-        fig.text(0.85, y_pos - 0.015, f"(Cap: {capacity})", fontsize=8, color='dimgray', va='center')
+        fig.text(0.85, y_pos - 0.015, f"(Qty. {capacity})", fontsize=8, color='dimgray', va='center')
 
         x_pos_cap = 0.92
         for cap in res["capabilities"]:
@@ -673,7 +673,7 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
                                           facecolor=res_color, edgecolor='black',
                                           transform=fig.transFigure, figure=fig)])
         fig.text(0.85, y_pos, res_name, fontsize=10, va='center')
-        fig.text(0.85, y_pos - 0.015, f"(Cap: {capacity})", fontsize=8, color='dimgray', va='center')
+        fig.text(0.85, y_pos - 0.015, f"(Qty. {capacity})", fontsize=8, color='dimgray', va='center')
 
         x_pos_cap = 0.92
         for cap in res["capabilities"]:
@@ -759,7 +759,7 @@ def _plot_gantt_chart(
             if info:
                 # ラベルのY座標を領域の下端に設定
                 y_pos_bottom = y_range['end'] + 0.35
-                label = f"{info['name'].upper()} (Cap: {info['max_robots']})"
+                label = f"{info['name'].upper()} (Max: {info['max_robots']})"
                 ax.text(-7, y_pos_bottom, label,
                         va='bottom',  # 垂直方向の配置基準を 'bottom' に変更
                         ha='left',
@@ -1453,35 +1453,68 @@ def setup_rcpsp_problem(input_data: dict, combinations: dict) -> (rcpsp_pb2.Rcps
 
 
 def main(_):
+    # Yamaguchi original
+    # input_data = {
+    #     "project_name": "TestTask",
+    #     "locations": [
+    #         {"name": "kitchen", "max_robots": 2},
+    #         {"name": "entrance", "max_robots": 1},
+    #         {"name": "room_center", "max_robots": 1}
+    #     ],
+    #     "resources": {
+    #         "robot": [
+    #             {"name": "r8_robot", "quantity": 1, "capabilities": ["arm", "camera", "gripper"]},
+    #             {"name": "pr2_robot", "quantity": 2, "capabilities": ["camera", "arm"]},
+    #         ],
+    #         "module": [
+    #             {"name": "arm_module", "quantity": 3, "capabilities": ["arm", "camera", "cleaner"]},
+    #             {"name": "temp_module", "quantity": 1, "capabilities": ["temp"]},
+    #             {"name": "camera_module", "quantity": 1, "capabilities": ["camera"]},
+    #             {"name": "gripper_module", "quantity": 1, "capabilities": ["gripper"]},
+    #             {"name": "cleaner_module", "quantity": 1, "capabilities": ["cleaner"]}
+    #         ]
+    #     },
+    #     "tasks": [
+    #         {"name": "cooking", "duration": 30, "required_capabilities": ["arm", "camera", "gripper"], "location": "kitchen"},
+    #         {"name": "IH", "duration": 20, "required_capabilities": ["arm", "camera", "temp"], "location": "kitchen"},
+    #         {"name": "faucet", "duration": 25, "required_capabilities": ["arm", "gripper"], "location": "kitchen"},
+    #         {"name": "fridge", "duration": 15, "required_capabilities": ["arm", "gripper"], "location": "kitchen"},
+    #         {"name": "wall", "duration": 36, "required_capabilities": ["camera", "cleaner"], "location": "entrance"},
+    #         {"name": "table", "duration": 15, "required_capabilities": ["gripper", "cleaner"], "location": "room_center"}
+    #     ]
+    # }
+
+    # Nakane
     input_data = {
         "project_name": "TestTask",
         "locations": [
             {"name": "kitchen", "max_robots": 2},
             {"name": "entrance", "max_robots": 1},
-            {"name": "room_center", "max_robots": 1}
+            {"name": "hall", "max_robots": 2},
+            {"name": "casher", "max_robots": 1}
         ],
         "resources": {
             "robot": [
-                {"name": "r8_robot", "quantity": 1, "capabilities": ["arm", "camera", "gripper"]},
-                {"name": "pr2_robot", "quantity": 2, "capabilities": ["camera", "arm"]},
+                {"name": "r8_robot", "quantity": 1, "capabilities": ["arm", "camera", "gripper", "serve"]},
+                # {"name": "pr2_robot", "quantity": 2, "capabilities": ["camera", "arm", "serve"]},
             ],
             "module": [
-                {"name": "arm_module", "quantity": 3, "capabilities": ["arm", "camera", "cleaner"]},
-                {"name": "temp_module", "quantity": 1, "capabilities": ["temp"]},
-                {"name": "camera_module", "quantity": 1, "capabilities": ["camera"]},
-                {"name": "gripper_module", "quantity": 1, "capabilities": ["gripper"]},
-                {"name": "cleaner_module", "quantity": 1, "capabilities": ["cleaner"]}
+                {"name": "arm_module", "quantity": 4, "capabilities": ["arm", "camera", "cleaner"]},
+                {"name": "camera_module", "quantity": 3, "capabilities": ["camera"]},
+                {"name": "gripper_module", "quantity": 2, "capabilities": ["gripper"]},
+                {"name": "cleaner_module", "quantity": 2, "capabilities": ["cleaner"]}
             ]
         },
         "tasks": [
             {"name": "cooking", "duration": 30, "required_capabilities": ["arm", "camera", "gripper"], "location": "kitchen"},
-            {"name": "IH", "duration": 20, "required_capabilities": ["arm", "camera", "temp"], "location": "kitchen"},
-            {"name": "faucet", "duration": 25, "required_capabilities": ["arm", "gripper"], "location": "kitchen"},
-            {"name": "fridge", "duration": 15, "required_capabilities": ["arm", "gripper"], "location": "kitchen"},
-            {"name": "wall", "duration": 36, "required_capabilities": ["camera", "cleaner"], "location": "entrance"},
-            {"name": "table", "duration": 15, "required_capabilities": ["gripper", "cleaner"], "location": "room_center"}
+            {"name": "accounting", "duration": 10, "required_capabilities": ["camera"], "location": "casher"},
+            {"name": "wiping", "duration": 5, "required_capabilities": ["arm", "cleaner"], "location": "hall"},
+            {"name": "washing", "duration": 20, "required_capabilities": ["arm", "camera"], "location": "kitchen"},
+            {"name": "serving", "duration": 10, "required_capabilities": ["serve"], "location": "hall"},
+            {"name": "cleaning", "duration": 5, "required_capabilities": ["gripper", "cleaner"], "location": "entrance"}
         ]
     }
+
 
     # --- 1. データ準備 ---
     task_id_to_name, mode_to_name = create_name_mappings(input_data)
