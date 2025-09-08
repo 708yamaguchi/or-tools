@@ -613,29 +613,24 @@ def _get_base_task_name(task_name: str) -> str:
     return task_name
 
 
-def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_data, show_symbols=True):
-    """
-    ### 変更点 ###
-    - Resourcesの凡例を「Robots (Renewable)」と「Modules (Reservoir)」に分割
-    - それぞれに小見出しを追加して視覚的に分かりやすくした
-    """
+def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_data, show_symbols=True, title_fontsize=12, label_fontsize=10):
     # --- Capabilities Legend ---
-    fig.text(0.83, 0.90, "Capabilities", fontsize=12, fontweight='bold')
+    fig.text(0.83, 0.90, "Capabilities", fontsize=title_fontsize, fontweight='bold')
     y_pos = 0.88
     for cap, color in capability_color_map.items():
         ellipse = patches.Ellipse(xy=(0.835, y_pos), width=0.012, height=0.012,
                                   facecolor=color, edgecolor='black',
                                   transform=fig.transFigure, figure=fig)
         fig.patches.append(ellipse)
-        fig.text(0.85, y_pos, cap, fontsize=10, va='center')
+        fig.text(0.85, y_pos, cap, fontsize=label_fontsize, va='center')
         y_pos -= 0.03
 
     # --- Resources Legend ---
-    fig.text(0.83, y_pos - 0.02, "Resources", fontsize=12, fontweight='bold')
+    fig.text(0.83, y_pos - 0.02, "Resources", fontsize=title_fontsize, fontweight='bold')
     y_pos -= 0.05
 
     # 1. Robots (Renewable) のセクション
-    fig.text(0.83, y_pos, "Robots", fontsize=10, fontweight='bold', style='italic', color='dimgray')
+    fig.text(0.83, y_pos, "Robots", fontsize=label_fontsize, fontweight='bold', style='italic', color='dimgray')
     y_pos -= 0.035
     for res in input_data["resources"]["robot"]:
         res_name = res["name"]
@@ -645,8 +640,8 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
         fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.015), 0.01, 0.02,
                                           facecolor=res_color, edgecolor='black',
                                           transform=fig.transFigure, figure=fig)])
-        fig.text(0.85, y_pos, res_name, fontsize=10, va='center')
-        fig.text(0.85, y_pos - 0.015, f"(Qty. {capacity})", fontsize=8, color='dimgray', va='center')
+        fig.text(0.85, y_pos, res_name, fontsize=label_fontsize, va='center')
+        fig.text(0.85, y_pos - 0.015, f"(Qty. {capacity})", fontsize=label_fontsize - 2, color='dimgray', va='center')
 
         x_pos_cap = 0.92
         for cap in res["capabilities"]:
@@ -662,7 +657,7 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
     y_pos -= 0.02
 
     # 2. Modules (Reservoir) のセクション
-    fig.text(0.83, y_pos, "Modules", fontsize=10, fontweight='bold', style='italic', color='dimgray')
+    fig.text(0.83, y_pos, "Modules", fontsize=label_fontsize, fontweight='bold', style='italic', color='dimgray')
     y_pos -= 0.035
     for res in input_data["resources"]["module"]:
         res_name = res["name"]
@@ -672,8 +667,8 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
         fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.015), 0.01, 0.02,
                                           facecolor=res_color, edgecolor='black',
                                           transform=fig.transFigure, figure=fig)])
-        fig.text(0.85, y_pos, res_name, fontsize=10, va='center')
-        fig.text(0.85, y_pos - 0.015, f"(Qty. {capacity})", fontsize=8, color='dimgray', va='center')
+        fig.text(0.85, y_pos, res_name, fontsize=label_fontsize, va='center')
+        fig.text(0.85, y_pos - 0.015, f"(Qty. {capacity})", fontsize=label_fontsize - 2, color='dimgray', va='center')
 
         x_pos_cap = 0.92
         for cap in res["capabilities"]:
@@ -688,12 +683,12 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
     # --- Symbols Legend ---
     if show_symbols:
         y_pos -= 0.01
-        fig.text(0.83, y_pos, "Symbols", fontsize=12, fontweight='bold')
+        fig.text(0.83, y_pos, "Symbols", fontsize=title_fontsize, fontweight='bold')
         y_pos -= 0.035
         fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.0075), 0.01, 0.015,
                                           facecolor='lightgrey', edgecolor='black', hatch='//',
                                           transform=fig.transFigure, figure=fig)])
-        fig.text(0.85, y_pos, "Robot-led Placement / Retrieval", fontsize=9, va='center')
+        fig.text(0.85, y_pos, "Robot-led Placement / Retrieval", fontsize=label_fontsize - 1, va='center')
 
 
 def _plot_gantt_chart(
@@ -705,7 +700,10 @@ def _plot_gantt_chart(
     capability_color_map,
     resource_color_map,
     input_data,
-    task_id_to_location
+    task_id_to_location,
+    title,
+    title_fontsize=16,
+    label_fontsize=12
 ):
     """視覚的に改善されたGanttチャートをmatplotlibのAxesオブジェクトにプロットします。"""
     y_labels = [task_id_to_name.get(t, f"Task {t}") for t in all_task_ids]
@@ -729,7 +727,7 @@ def _plot_gantt_chart(
             new_y_labels.append(base_name)
 
     ax.set_yticks(range(len(new_y_labels)))
-    ax.set_yticklabels(new_y_labels)
+    ax.set_yticklabels(new_y_labels, fontsize=label_fontsize)
 
 
     # ★ 場所の区切り線とラベルを描画 ★
@@ -763,7 +761,7 @@ def _plot_gantt_chart(
                 ax.text(-7, y_pos_bottom, label,
                         va='bottom',  # 垂直方向の配置基準を 'bottom' に変更
                         ha='left',
-                        fontsize=10,
+                        fontsize=label_fontsize,
                         fontweight='bold', color='black',
                         bbox=dict(boxstyle="round,pad=0.3", fc='whitesmoke', ec='none', alpha=0.8))
 
@@ -839,10 +837,10 @@ def _plot_gantt_chart(
                           color=color, edgecolor="black", hatch=hatch_pattern)
 
         elif t not in executed_tasks:
-            ax.text(0, i, "--- SKIPPED ---", va='center', ha='left', style='italic', color='lightgrey')
+            ax.text(0, i, "--- SKIPPED ---", va='center', ha='left', style='italic', color='lightgrey', fontsize=label_fontsize)
 
-    ax.set_ylabel("Task")
-    ax.set_title("Task Schedule Gantt Chart")
+    ax.set_ylabel("Task", fontsize=label_fontsize)
+    ax.set_title(title, fontsize=title_fontsize)
     ax.invert_yaxis()
     ax.grid(True, which="major", axis="x", linestyle="--", linewidth=0.5)
 
@@ -856,7 +854,9 @@ def visualize_schedule_only(
     mode_to_resources_map,
     capability_color_map,
     resource_color_map,
-    input_data
+    input_data,
+    title_fontsize=16,
+    label_fontsize=12
 ):
     """
     Visualizes the scheduling result with the improved Gantt chart.
@@ -905,10 +905,14 @@ def visualize_schedule_only(
         capability_color_map,
         resource_color_map,
         input_data,
-        task_id_to_location  # 場所情報を描画関数に渡す
+        task_id_to_location,  # 場所情報を描画関数に渡す
+        title,
+        title_fontsize=title_fontsize,
+        label_fontsize=label_fontsize
     )
 
-    ax.set_xlabel("Time")
+    ax.set_xlabel("Time", fontsize=label_fontsize)
+    ax.tick_params(axis='x', labelsize=label_fontsize)
     ax.set_xlim(-8, makespan + 5) # ラベル表示用に左側のリミットを調整
     ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=20))
 
@@ -916,7 +920,9 @@ def visualize_schedule_only(
         fig,
         capability_color_map,
         resource_color_map,
-        input_data
+        input_data,
+        title_fontsize=title_fontsize - 2,
+        label_fontsize=label_fontsize - 2
     )
 
     plt.show()
@@ -986,12 +992,7 @@ def draw_capabilities(ax, capabilities, x_start, y_pos, cap_color_map, patch_siz
             ax.add_patch(ellipse)
 
 
-def visualize_task_combinations(input_data, calculated_combinations, cap_color_map, resource_color_map):
-    """
-    ### 変更 ###
-    - `draw_capabilities`に渡すx座標の値を小さくし、楕円をテキスト側に寄せました。
-    - タスク名の横に場所(location)情報を表示するようにしました。
-    """
+def visualize_task_combinations(input_data, calculated_combinations, cap_color_map, resource_color_map, title_fontsize=16, label_fontsize=12):
     all_resources = input_data["resources"]["robot"] + input_data["resources"]["module"]
     all_capabilities = set(cap for res in all_resources for cap in res["capabilities"])
     sorted_caps = sorted(list(all_capabilities))
@@ -1005,7 +1006,7 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
     ax.set_ylim(0, line_count)
     ax.axis('off')
 
-    fig.suptitle("Task Assignment Options", fontsize=16, fontweight='bold')
+    fig.suptitle("Task Assignment Options", fontsize=title_fontsize, fontweight='bold')
 
     x_range = ax.get_xlim()[1] - ax.get_xlim()[0]
     y_range = ax.get_ylim()[1] - ax.get_ylim()[0]
@@ -1014,24 +1015,24 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
 
     y_pos = line_count - 1
     for task in input_data["tasks"]:
-        # ★ タスク名と場所を併記
+        # タスク名と場所を併記
         task_display_name = f"TASK: {task['name']}"
         if 'location' in task:
             task_display_name += f"  @ {task['location']}"
-        ax.text(0.5, y_pos, task_display_name, fontsize=14, fontweight='bold', va='center')
+        ax.text(0.5, y_pos, task_display_name, fontsize=label_fontsize + 2, fontweight='bold', va='center')
 
         y_pos -= 1.2
-        ax.text(1.0, y_pos, "Required:", fontsize=12, va='center')
+        ax.text(1.0, y_pos, "Required:", fontsize=label_fontsize, va='center')
 
         draw_capabilities(ax, task['required_capabilities'], 2.0, y_pos, cap_color_map, aspect_correction=aspect_correction)
 
         y_pos -= 1.5
         combinations_for_task = calculated_combinations[task['name']]
         for i, combo in enumerate(combinations_for_task):
-            ax.text(1.5, y_pos, f"Solution {i+1}", fontsize=12, va='center', style='italic', color='navy')
+            ax.text(1.5, y_pos, f"Solution {i+1}", fontsize=label_fontsize, va='center', style='italic', color='navy')
             y_pos -= 1
             for resource_name in combo:
-                ax.text(2.0, y_pos, f"• {resource_name}", fontsize=11, va='center')
+                ax.text(2.0, y_pos, f"• {resource_name}", fontsize=label_fontsize - 1, va='center')
                 resource_data = next((r for r in all_resources if r["name"] == resource_name), None)
                 if resource_data:
                     draw_capabilities(ax, resource_data['capabilities'], 3.8, y_pos, cap_color_map, aspect_correction=aspect_correction)
@@ -1047,7 +1048,9 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
         cap_color_map,
         resource_color_map,
         input_data,
-        show_symbols=False
+        show_symbols=False,
+        title_fontsize=title_fontsize - 2,
+        label_fontsize=label_fontsize - 2,
     )
     fig.subplots_adjust(right=0.8, top=0.92)
     plt.show()
@@ -1100,11 +1103,17 @@ def _process_and_display_solution(
         mode_to_resources_map=mode_to_resources_map,
     )
 
+    # 可視化関数のフォントサイズを指定
+    title_font_size = 26
+    label_font_size = 18
+
     visualize_task_combinations(
         input_data,
         irreducible_combinations,
         capability_color_map,
-        resource_color_map)
+        resource_color_map,
+        title_fontsize=title_font_size,
+        label_fontsize=label_font_size)
 
     visualize_schedule_only(
         solver,
@@ -1115,7 +1124,9 @@ def _process_and_display_solution(
         mode_to_resources_map,
         capability_color_map,
         resource_color_map,
-        input_data=input_data
+        input_data=input_data,
+        title_fontsize=title_font_size,
+        label_fontsize=label_font_size
     )
 
 
@@ -1484,7 +1495,6 @@ def main(_):
     #     ]
     # }
 
-    # Nakane
     input_data = {
         "project_name": "Restaurant",
         "locations": [
@@ -1495,13 +1505,13 @@ def main(_):
         ],
         "resources": {
             "robot": [
-                {"name": "r8_robot", "quantity": 1, "capabilities": ["arm", "camera", "gripper", "serve"]},
+                {"name": "r8_r", "quantity": 1, "capabilities": ["arm", "camera", "gripper", "serve"]},
             ],
             "module": [
-                {"name": "arm_module", "quantity": 4, "capabilities": ["arm", "camera", "cleaner"]},
-                {"name": "camera_module", "quantity": 3, "capabilities": ["camera"]},
-                {"name": "gripper_module", "quantity": 2, "capabilities": ["gripper"]},
-                {"name": "cleaner_module", "quantity": 2, "capabilities": ["cleaner"]}
+                {"name": "arm_m", "quantity": 4, "capabilities": ["arm", "camera", "cleaner"]},
+                {"name": "camera_m", "quantity": 3, "capabilities": ["camera"]},
+                {"name": "gripper_m", "quantity": 2, "capabilities": ["gripper"]},
+                {"name": "cleaner_m", "quantity": 2, "capabilities": ["cleaner"]}
             ]
         },
         "tasks": [
