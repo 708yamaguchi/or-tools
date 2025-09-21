@@ -1495,35 +1495,54 @@ def main(_):
     #     ]
     # }
 
+    # input_data = {
+    #     "project_name": "Restaurant",
+    #     "locations": [
+    #         {"name": "kitchen", "max_robots": 2},
+    #         {"name": "entrance", "max_robots": 1},
+    #         {"name": "hall", "max_robots": 2},
+    #         {"name": "casher", "max_robots": 1}
+    #     ],
+    #     "resources": {
+    #         "robot": [
+    #             {"name": "r8_r", "quantity": 1, "capabilities": ["arm", "camera", "gripper", "serve"]},
+    #         ],
+    #         "module": [
+    #             {"name": "arm_m", "quantity": 4, "capabilities": ["arm", "camera", "cleaner"]},
+    #             {"name": "camera_m", "quantity": 3, "capabilities": ["camera"]},
+    #             {"name": "gripper_m", "quantity": 2, "capabilities": ["gripper"]},
+    #             {"name": "cleaner_m", "quantity": 2, "capabilities": ["cleaner"]}
+    #         ]
+    #     },
+    #     "tasks": [
+    #         {"name": "cooking", "duration": 30, "required_capabilities": ["arm", "camera", "gripper"], "location": "kitchen"},
+    #         {"name": "accounting", "duration": 10, "required_capabilities": ["camera"], "location": "casher"},
+    #         {"name": "wiping", "duration": 5, "required_capabilities": ["arm", "cleaner"], "location": "hall"},
+    #         {"name": "washing", "duration": 20, "required_capabilities": ["arm", "camera"], "location": "kitchen"},
+    #         {"name": "serving", "duration": 10, "required_capabilities": ["serve"], "location": "hall"},
+    #         {"name": "cleaning", "duration": 5, "required_capabilities": ["gripper", "cleaner"], "location": "entrance"}
+    #     ]
+    # }
+
     input_data = {
-        "project_name": "Restaurant",
+        "project_name": "Simple cleaning",
         "locations": [
-            {"name": "kitchen", "max_robots": 2},
+            {"name": "kitchen", "max_robots": 1},
             {"name": "entrance", "max_robots": 1},
-            {"name": "hall", "max_robots": 2},
-            {"name": "casher", "max_robots": 1}
         ],
         "resources": {
             "robot": [
-                {"name": "r8_r", "quantity": 1, "capabilities": ["arm", "camera", "gripper", "serve"]},
+                {"name": "r8_r", "quantity": 1, "capabilities": ["dual_arm"]},
             ],
             "module": [
-                {"name": "arm_m", "quantity": 4, "capabilities": ["arm", "camera", "cleaner"]},
-                {"name": "camera_m", "quantity": 3, "capabilities": ["camera"]},
-                {"name": "gripper_m", "quantity": 2, "capabilities": ["gripper"]},
-                {"name": "cleaner_m", "quantity": 2, "capabilities": ["cleaner"]}
+                {"name": "arm_m", "quantity": 3, "capabilities": ["arm"]},
             ]
         },
         "tasks": [
-            {"name": "cooking", "duration": 30, "required_capabilities": ["arm", "camera", "gripper"], "location": "kitchen"},
-            {"name": "accounting", "duration": 10, "required_capabilities": ["camera"], "location": "casher"},
-            {"name": "wiping", "duration": 5, "required_capabilities": ["arm", "cleaner"], "location": "hall"},
-            {"name": "washing", "duration": 20, "required_capabilities": ["arm", "camera"], "location": "kitchen"},
-            {"name": "serving", "duration": 10, "required_capabilities": ["serve"], "location": "hall"},
-            {"name": "cleaning", "duration": 5, "required_capabilities": ["gripper", "cleaner"], "location": "entrance"}
+            {"name": "wiping", "duration": 5, "required_capabilities": ["arm"], "location": "kitchen"},
+            {"name": "cleaning", "duration": 5, "required_capabilities": ["dual_arm"], "location": "entrance"}
         ]
     }
-
 
     # --- 1. データ準備 ---
     task_id_to_name, mode_to_name = create_name_mappings(input_data)
