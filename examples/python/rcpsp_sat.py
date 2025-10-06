@@ -109,6 +109,8 @@ def generate_rcpsp_max_from_json(input_data, resolved_task_modes, debug_print=Fa
     num_actual_modules = len(actual_modules)
     module_map = {res['name']: i for i, res in enumerate(actual_modules)}
 
+    module_handling_time = input_data.get("module_handling_time", 5)
+
     # 場所情報の読み込み
     locations = input_data.get('locations', [])
     num_locations = len(locations)
@@ -227,7 +229,7 @@ def generate_rcpsp_max_from_json(input_data, resolved_task_modes, debug_print=Fa
             # --- 配置(Placement)・回収(Retrieval)モードのデマンド ---
             mode_num_pr = 0
             for i, combo in enumerate(combinations_for_task):
-                cost = 5 if any(res_name in module_map for res_name in combo) else 0
+                cost = module_handling_time if any(res_name in module_map for res_name in combo) else 0
                 for j in range(num_actual_robots):
                     mode_num_pr += 1
                     placement_costs_by_mode[mode_num_pr] = cost
@@ -543,12 +545,13 @@ def print_schedule_by_task(
     task_id_to_name: dict,
     mode_to_name: dict,
     mode_to_resources_map: dict,
+    makespan: float,
 ) -> None:
     """
     Prints the schedule details for each task.
     """
     print("Solution Found:")
-    print(f"Optimal Makespan: {solver.objective_value}")
+    print(f"Makespan: {makespan}")
     print("--------------------------------------------------")
     print("--- Schedule by Task (Skipped tasks included) ---")
     name_width = max(len(name) for name in task_id_to_name.values()) + 2
@@ -610,13 +613,14 @@ def print_schedule_by_time_step(
     task_id_to_name: dict,
     mode_to_name: dict,
     mode_to_resources_map: dict,
+    makespan: float,
 ):
     """
     Prints running tasks and resource status for each time step.
     """
     print("\n--- Schedule by Time Step ---")
-    makespan = int(solver.objective_value)
-    for t in range(makespan + 1):
+    loop_end = int(makespan)
+    for t in range(loop_end + 1):
         running_tasks_info = []
         running_tasks_ids = []
         for task_id in executed_tasks:
@@ -929,6 +933,7 @@ def visualize_schedule_only(
     capability_color_map,
     resource_color_map,
     input_data,
+    makespan,
     title_fontsize=16,
     label_fontsize=12
 ):
@@ -963,7 +968,6 @@ def visualize_schedule_only(
     sorted_task_ids = sorted(list(all_active_tasks), key=sort_key)
 
     # 2. グラフ描画
-    makespan = int(solver.objective_value)
     gantt_height = max(5, len(all_active_tasks) * 0.6)
     fig, ax = plt.subplots(figsize=(20, gantt_height))
 
@@ -1238,9 +1242,13 @@ def _process_and_display_solution(
     capability_color_map,
     resource_color_map,
     irreducible_combinations,
-    input_data
+    input_data,
+    module_capacities,
+    optimization_mode, # ★変更点: 最適化モードを受け取る
 ):
     """Processes and displays the solution from the solver."""
+    actual_makespan = solver.value(task_starts[sink])
+
     executed_tasks = []
     for t in all_active_tasks:
         literals = task_to_presence_literals[t]
@@ -1262,6 +1270,7 @@ def _process_and_display_solution(
         task_starts, task_durations, task_ends, selected_recipes,
         task_id_to_name, mode_to_name,
         mode_to_resources_map=mode_to_resources_map,
+        makespan=actual_makespan,
     )
     # Commenting out time-step print for brevity, can be re-enabled if needed
     print_schedule_by_time_step(
@@ -1269,33 +1278,148 @@ def _process_and_display_solution(
         task_to_resource_demands, all_resources, selected_recipes,
         task_id_to_name, mode_to_name,
         mode_to_resources_map=mode_to_resources_map,
+        makespan=actual_makespan,
     )
 
-    # 可視化関数のフォントサイズを指定
-    title_font_size = 26
-    label_font_size = 18
+    # --- 最適化モードに応じて結果サマリーを表示 ---
+    print("\nSolution Found:")
+    if optimization_mode == 'MINIMIZE_MAKESPAN':
+        print(f"Optimal Makespan: {solver.objective_value}")
+    elif optimization_mode == 'MINIMIZE_MODULES':
+        print(f"Optimal Total Modules Required: {int(solver.objective_value)}")
+        print(f"Schedule completed in {solver.value(task_starts[sink])} time units.")
+        print("--------------------------------------------------")
+        print("--- Required Capacity per Module ---")
+        if not module_capacities:
+            print("  No modules were used/optimized in this problem.")
+        else:
+            num_renewable = len(renewable_id_to_name)
+            for res_id, cap_var in module_capacities.items():
+                module_name = reservoir_id_to_name.get(res_id - num_renewable, f"Unknown_Module_{res_id}")
+                print(f"  - {module_name}: {solver.value(cap_var)}")
+    print("--------------------------------------------------")
 
+    # Visualize
+    title_font_size, label_font_size = 26, 18
     visualize_task_combinations(
-        input_data,
-        irreducible_combinations,
-        capability_color_map,
-        resource_color_map,
-        title_fontsize=title_font_size,
+        input_data, irreducible_combinations, capability_color_map,
+        resource_color_map, title_fontsize=title_font_size,
         label_fontsize=label_font_size)
-
     visualize_schedule_only(
-        solver,
-        all_active_tasks, executed_tasks, task_starts,
-        task_durations, selected_recipes,
-        task_id_to_name, mode_to_name, "Task Schedule Gantt Chart",
-        recipe_to_caps_map,
-        mode_to_resources_map,
-        capability_color_map,
-        resource_color_map,
-        input_data=input_data,
-        title_fontsize=title_font_size,
-        label_fontsize=label_font_size
+        solver, all_active_tasks, executed_tasks, task_starts,
+        task_durations, selected_recipes, task_id_to_name, mode_to_name,
+        "Task Schedule Gantt Chart", recipe_to_caps_map, mode_to_resources_map,
+        capability_color_map, resource_color_map, input_data=input_data,
+        makespan=actual_makespan,
+        title_fontsize=title_font_size, label_fontsize=label_font_size
     )
+
+
+def add_variable_capacity_reservoir_constraint(
+    model: cp_model.CpModel,
+    res_id: int,
+    num_main_tasks: int,
+    active_tasks: set[int],
+    task_starts: dict,
+    task_ends: dict,
+    task_to_presence_literals: dict,
+    task_resource_to_fixed_demands: dict,
+    horizon: int,
+):
+    """【新規追加】可変容量を持つReservoirリソース（モジュール）の制約を追加します。
+
+    この関数は、モジュールが「配置完了」から「回収開始」まで専有されるという、
+    このRCPSP問題の特性を利用して、必要なモジュールの最小数を計算するための制約を構築します。
+    内部では、モジュールの専有期間をインターバル（期間）変数として定義し、
+    `AddCumulative`制約を用いて、同時に存在するインターバルの最大数（=必要なモジュール数）を
+    求めるモデルを構築します。これにより、容量自体を最適化変数として扱う
+    リソース投資問題を表現できます。
+
+    ■ 元の `add_reservoir_constraint_with_active` との主な違い:
+    https://github.com/google/or-tools/blob/93dafb79a0261b5211f4eb17437aeebd7f45e543/ortools/sat/python/cp_model.py#L1304
+
+    1. 容量の扱い:
+       - `add_reservoir_constraint_with_active`:
+           容量を`max_level`引数として**固定値の整数**で受け取ります。容量を変数にすることはできません。
+       - この関数 (`add_variable_capacity_reservoir_constraint`):
+           容量を**最適化変数**として内部で生成し、その変数を戻り値として返します。
+           これにより、目的関数で容量を最小化できます。
+
+    2. 制約のモデル手法:
+       - `add_reservoir_constraint_with_active`:
+           **イベントモデル**。指定時刻にレベルが増減する「貯水池」の動きを直接モデル化します。
+       - この関数:
+           **インターバルモデル**。リソースが専有される「期間」を定義し、その期間の重なり（累積）を計算します。
+           エラーの原因となったライブラリの制限を回避し、リソース投資問題を効率的に扱えます。
+
+    3. 汎用性:
+       - `add_reservoir_constraint_with_active`:
+           汎用的な関数。時刻と変化量のリストを渡せば、様々な問題に利用できます。
+       - この関数:
+           このプロジェクトの「配置→作業→回収」というタスク構造に**特化**した関数です。
+           そのため、引数もタスクの開始・終了時刻など、より具体的な情報を必要とします。
+
+    Args:
+        model (cp_model.CpModel): CP-SATモデルのインスタンス。
+        res_id (int): 対象となるリソースのID。
+        num_main_tasks (int): プロジェクトの主タスクの総数。
+        active_tasks (set[int]): 計算対象となるアクティブなタスクIDのセット。
+        task_starts (dict): 各タスクの開始時刻を保持する変数ディクショナリ。
+        task_ends (dict): 各タスクの終了時刻を保持する変数ディクショナリ。
+        task_to_presence_literals (dict): 各タスクのレシピ選択リテラルのディクショナリ。
+        task_resource_to_fixed_demands (dict): (タスク, リソース) -> デマンドリスト のディクショナリ。
+        horizon (int): 計算のホライゾン（期間上限）。
+
+    Returns:
+        IntVar: 計算された最小キャパシティを表す最適化変数。
+    """
+    placed_intervals = []
+    demands_for_cumulative = []
+
+    # 各タスクがこのモジュールリソースを使用する場合、その使用期間をインターバルとして定義
+    for n in range(1, num_main_tasks + 1):
+        p_id, _, r_id = get_task_ids(n)
+        if p_id not in active_tasks or r_id not in active_tasks:
+            continue
+
+        # このタスクの各レシピ（モード）がリソース`res_id`を使用するかチェック
+        for recipe_idx, usage_lit in enumerate(task_to_presence_literals[p_id]):
+            # usage_litが整数(1)の場合、boolvarに変換する
+            if isinstance(usage_lit, int):
+                if usage_lit == 1:
+                    usage_lit = model.new_constant(1)
+                else:
+                    continue # このレシピは選択されない
+
+            demand = task_resource_to_fixed_demands[(p_id, res_id)][recipe_idx]
+            if demand > 0:
+                # モジュールの専有期間(start_varからend_var)は、
+                # Placementタスクの開始からRetrievalタスクの終了まで
+                start_var = task_starts[p_id] # Placementタスクの開始時刻
+                end_var = task_ends[r_id]     # Retrievalタスクの終了時刻
+
+                # 期間長を表現する変数
+                duration_var = model.new_int_var(0, horizon, f"placed_duration_{n}_{res_id}_{recipe_idx}")
+                model.add(start_var + duration_var == end_var).only_enforce_if(usage_lit)
+
+                # OptionalIntervalVarを作成（このレシピが選択された時のみ有効なインターバル）
+                interval = model.new_optional_interval_var(
+                    start_var, duration_var, end_var, usage_lit,
+                    f"placed_interval_{n}_{res_id}_{recipe_idx}"
+                )
+                placed_intervals.append(interval)
+                demands_for_cumulative.append(demand)
+
+    # このモジュールに必要なキャパシティ（最大同時使用数）を表す変数
+    upper_bound = sum(d for d in demands_for_cumulative)
+    capacity_var = model.new_int_var(0, upper_bound if upper_bound > 0 else 0, f"capacity_module_{res_id}")
+
+    # AddCumulative制約で、同時使用数がキャパシティを超えないようにする
+    if placed_intervals:
+        model.add_cumulative(placed_intervals, demands_for_cumulative, capacity_var)
+
+    # 計算されたキャパシティ変数を返す
+    return capacity_var
 
 
 def solve_rcpsp(
@@ -1307,41 +1431,46 @@ def solve_rcpsp(
     sink: int,
     optional_tasks: set[int],
     num_actual_robots: int,
+    optimization_mode: str,
+    makespan_limit: int = None,
 ) -> None:
     """Parse and solve a given RCPSP problem in proto format."""
     model = cp_model.CpModel()
     model.name = problem.name
 
     num_resources = len(problem.resources)
-
-    all_active_tasks = list(active_tasks)
-    all_active_tasks.sort()
+    all_active_tasks = sorted(list(active_tasks))
     all_resources = range(num_resources)
 
-    horizon = problem.deadline if problem.deadline != -1 else problem.horizon
-    if _HORIZON.value > 0:
-        horizon = _HORIZON.value
-    elif horizon == -1:  # Naive computation.
-        horizon = sum(max(r.duration for r in t.recipes) for t in problem.tasks)
-        if problem.is_rcpsp_max:
-            for t in problem.tasks:
-                for sd in t.successor_delays:
-                    for rd in sd.recipe_delays:
-                        for d in rd.min_delays:
-                            horizon += abs(d)
-    print(f"Horizon = {horizon}", flush=True)
+    # --- 最適化モードに応じてホライゾン（計算範囲）を決定 ---
+    horizon = 0
+    if optimization_mode == 'MINIMIZE_MODULES':
+        if makespan_limit is None:
+            raise ValueError("モジュール数最小化モードでは `makespan_limit` の指定が必要です。")
+        horizon = makespan_limit
+    else:  # 'MINIMIZE_MAKESPAN' モードの場合
+        if problem.deadline != -1:
+            horizon = problem.deadline
+        elif _HORIZON.value > 0:
+            horizon = _HORIZON.value
+        else:  # Naive computation.
+            horizon = sum(max(r.duration for r in t.recipes) for t in problem.tasks)
+            if problem.is_rcpsp_max:
+                for t in problem.tasks:
+                    for sd in t.successor_delays:
+                        for rd in sd.recipe_delays:
+                            for d in rd.min_delays:
+                                horizon += abs(d)
+    print(f"Optimization Mode = {optimization_mode}, Horizon = {horizon}", flush=True)
 
+    # --- 変数定義 ---
     task_starts = {}
     task_ends = {}
     task_durations = {}
     task_intervals = {}
-    task_resource_to_energy = {}
     task_to_resource_demands = collections.defaultdict(list)
     task_to_presence_literals = collections.defaultdict(list)
-    task_to_recipe_durations = collections.defaultdict(list)
     task_resource_to_fixed_demands = collections.defaultdict(dict)
-    task_resource_to_max_energy = collections.defaultdict(int)
-    resource_to_sum_of_demand_max = collections.defaultdict(int)
     is_present_literals = {}
 
     for t in all_active_tasks:
@@ -1350,201 +1479,112 @@ def solve_rcpsp(
         all_recipes = range(num_recipes)
         start_var = model.new_int_var(0, horizon, f"start_of_task_{t}")
         end_var = model.new_int_var(0, horizon, f"end_of_task_{t}")
-
+        literals = []
         if num_recipes > 1:
             literals = [model.new_bool_var(f"is_present_{t}_{r}") for r in all_recipes]
-            if t in optional_tasks:
-                model.add_at_most_one(literals)
-            else:
-                model.add_exactly_one(literals)
+            model.add_exactly_one(literals)
         else:
-            if t in optional_tasks:
-                literals = [model.new_bool_var(f"is_present_{t}_0")]
-            else:
-                literals = [1]
-
-        if len(literals) == 1 and isinstance(literals[0], int):
-            is_present = model.new_constant(1)
-        else:
-            is_present = model.new_bool_var(f"is_present_{t}")
-            model.add(is_present == sum(literals))
+            literals = [1]
+        is_present = model.new_bool_var(f"is_present_{t}") if num_recipes > 1 else model.new_constant(1)
+        if num_recipes > 1: model.add(is_present == sum(literals))
         is_present_literals[t] = is_present
-
         demand_matrix = collections.defaultdict(int)
-
+        recipe_durations = [r.duration for r in task.recipes]
         for recipe_index, recipe in enumerate(task.recipes):
-            task_to_recipe_durations[t].append(recipe.duration)
             for demand, resource in zip(recipe.demands, recipe.resources):
                 demand_matrix[(resource, recipe_index)] = demand
-
-        duration_var = model.new_int_var_from_domain(
-            cp_model.Domain.from_values(task_to_recipe_durations[t]),
-            f"duration_of_task_{t}",
-        )
-
-        for r in range(num_recipes):
-            model.add(duration_var == task_to_recipe_durations[t][r]).only_enforce_if(
-                literals[r]
-            )
-
-        task_interval = model.new_optional_interval_var(
-            start_var, duration_var, end_var, is_present, f"task_interval_{t}"
-        )
-
-        task_starts[t] = start_var
-        task_ends[t] = end_var
-        task_durations[t] = duration_var
-        task_intervals[t] = task_interval
-        task_to_presence_literals[t] = literals
-
+        duration_var = model.new_int_var_from_domain(cp_model.Domain.from_values(recipe_durations), f"duration_of_task_{t}")
+        for r in all_recipes:
+            model.add(duration_var == recipe_durations[r]).only_enforce_if(literals[r])
+        task_interval = model.new_optional_interval_var(start_var, duration_var, end_var, is_present, f"task_interval_{t}")
+        task_starts[t], task_ends[t], task_durations[t], task_intervals[t], task_to_presence_literals[t] = \
+            start_var, end_var, duration_var, task_interval, literals
         for res in all_resources:
             demands = [demand_matrix[(res, recipe)] for recipe in all_recipes]
             task_resource_to_fixed_demands[(t, res)] = demands
-            demand_var = model.new_int_var_from_domain(
-                cp_model.Domain.from_values(demands), f"demand_{t}_{res}"
-            )
+            demand_var = model.new_int_var_from_domain(cp_model.Domain.from_values(demands), f"demand_{t}_{res}")
             task_to_resource_demands[t].append(demand_var)
             for r in all_recipes:
-                model.add(demand_var == demand_matrix[(res, r)]).only_enforce_if(
-                    literals[r]
-                )
-            resource_to_sum_of_demand_max[res] += max(demands)
+                model.add(demand_var == demands[r]).only_enforce_if(literals[r])
 
-        for res in all_resources:
-            task_resource_to_energy[(t, res)] = sum(
-                literals[r]
-                * task_to_recipe_durations[t][r]
-                * task_resource_to_fixed_demands[(t, res)][r]
-                for r in all_recipes
-            )
-            task_resource_to_max_energy[(t, res)] = max(
-                task_to_recipe_durations[t][r]
-                * task_resource_to_fixed_demands[(t, res)][r]
-                for r in all_recipes
-            )
-
+    # --- モード間連携の制約 (従来と同じ) ---
     M = num_actual_robots
     num_main_tasks = (len(problem.tasks) - 2) // 3
-
     for n in range(1, num_main_tasks + 1):
-        placement_id, work_id, retrieval_id = get_task_ids(n)
-        if not all(t in active_tasks for t in [placement_id, work_id, retrieval_id]):
-            continue
+        p_id, w_id, r_id = get_task_ids(n)
+        if not all(t in active_tasks for t in [p_id, w_id, r_id]): continue
+        p_lits, w_lits, r_lits = task_to_presence_literals[p_id], task_to_presence_literals[w_id], task_to_presence_literals[r_id]
+        if len(p_lits) == len(r_lits):
+            for k in range(len(p_lits)): model.add(p_lits[k] == r_lits[k])
+        if M > 0 and len(w_lits) > 0:
+            for i in range(len(w_lits)): model.add(w_lits[i] == sum(p_lits[i * M : (i + 1) * M]))
 
-        placement_lits = task_to_presence_literals[placement_id]
-        work_lits = task_to_presence_literals[work_id]
-        retrieval_lits = task_to_presence_literals[retrieval_id]
-
-        if len(placement_lits) == len(retrieval_lits):
-            for k in range(len(placement_lits)):
-                model.add(placement_lits[k] == retrieval_lits[k])
-
-        if M > 0 and len(work_lits) > 0:
-            num_work_modes = len(work_lits)
-            for i in range(num_work_modes):
-                corresponding_placement_lits = placement_lits[i * M : (i + 1) * M]
-                model.add(work_lits[i] == sum(corresponding_placement_lits))
-
+    # --- メイクスパン定義と先行関係制約 (従来と同じ) ---
     makespan = model.new_int_var(0, horizon, "makespan")
-    makespan_size = model.new_int_var(1, horizon, "interval_makespan_size")
-    interval_makespan = model.new_interval_var(
-        makespan,
-        makespan_size,
-        model.new_constant(horizon + 1),
-        "interval_makespan",
-    )
+    for t in all_active_tasks:
+        for n in problem.tasks[t].successors:
+            if n == sink:
+                model.add(task_ends[t] <= makespan).only_enforce_if(is_present_literals[t])
+            elif n in active_tasks:
+                model.add(task_ends[t] <= task_starts[n]).only_enforce_if([is_present_literals[t], is_present_literals[n]])
 
-    if problem.is_rcpsp_max:
-        for task_id in all_active_tasks:
-            task = problem.tasks[task_id]
-            is_present_t = is_present_literals[task_id]
-            for successor_index, next_id in enumerate(task.successors):
-                delay_matrix = task.successor_delays[successor_index]
-                if next_id == sink:
-                    for m1 in range(len(task.recipes)):
-                        p1 = task_to_presence_literals[task_id][m1]
-                        delay = delay_matrix.recipe_delays[m1].min_delays[0]
-                        model.add(task_starts[task_id] + delay <= makespan).only_enforce_if(p1)
-                else:
-                    is_present_n = is_present_literals[next_id]
-                    num_next_modes = len(problem.tasks[next_id].recipes)
-                    for m1 in range(len(task.recipes)):
-                        s1 = task_starts[task_id]
-                        p1 = task_to_presence_literals[task_id][m1]
-                        for m2 in range(num_next_modes):
-                            delay = delay_matrix.recipe_delays[m1].min_delays[m2]
-                            s2 = task_starts[next_id]
-                            p2 = task_to_presence_literals[next_id][m2]
-                            model.add(s1 + delay <= s2).only_enforce_if([p1, p2])
-    else:
-        for t in all_active_tasks:
-            is_present_t = is_present_literals[t]
-            for n in problem.tasks[t].successors:
-                if n == sink:
-                    model.add(task_ends[t] <= makespan).only_enforce_if(is_present_t)
-                elif n in active_tasks:
-                    is_present_n = is_present_literals[n]
-                    model.add(task_ends[t] <= task_starts[n]).only_enforce_if([is_present_t, is_present_n])
+    # モードに応じてリソース制約と目的関数を定義
+    module_capacity_vars = {}
+    reservoir_resources = [res for res in all_resources if not problem.resources[res].renewable]
 
-    capacities = []
-    max_cost = 0
+    # モードに寄らず、makespanのリミットを定義
+    model.add(makespan <= makespan_limit)
+    # --- モジュール数最小化モード ---
+    if optimization_mode == 'MINIMIZE_MODULES':
+        # Renewableリソース(ロボット, 場所)の制約
+        for res in all_resources:
+            if problem.resources[res].renewable:
+                model.add_cumulative([task_intervals[t] for t in all_active_tasks],
+                                     [task_to_resource_demands[t][res] for t in all_active_tasks],
+                                     problem.resources[res].max_capacity)
+        
+        # Reservoirリソース(モジュール)の制約は、新しいヘルパー関数を呼び出す
+        for res in reservoir_resources:
+            capacity_var = add_variable_capacity_reservoir_constraint(
+                model, res, num_main_tasks, active_tasks, task_starts, task_ends,
+                task_to_presence_literals, task_resource_to_fixed_demands, horizon
+            )
+            module_capacity_vars[res] = capacity_var
+        
+        # モジュールは必ず回収される、という制約（消費と供給の合計がゼロ）
+        for res in reservoir_resources:
+            consumption_terms = [d * lit for t in all_active_tasks for r, lit in enumerate(task_to_presence_literals[t]) if (d := task_resource_to_fixed_demands[(t, res)][r]) != 0]
+            if consumption_terms: model.add(sum(consumption_terms) == 0)
 
-    for res in all_resources:
-        resource = problem.resources[res]
-        c = resource.max_capacity
-        if c == -1: c = resource_to_sum_of_demand_max[res]
-        if problem.is_resource_investment or resource.renewable:
-            intervals = [task_intervals[t] for t in all_active_tasks]
-            demands = [task_to_resource_demands[t][res] for t in all_active_tasks]
-            if problem.is_resource_investment:
-                capacity = model.new_int_var(0, c, f"capacity_of_{res}")
-                model.add_cumulative(intervals, demands, capacity)
-                capacities.append(capacity)
-                max_cost += c * resource.unit_cost
-            else:
-                if _USE_INTERVAL_MAKESPAN.value:
-                    intervals.append(interval_makespan)
-                    demands.append(c)
-                model.add_cumulative(intervals, demands, c)
+        # 目的関数: モジュールキャパシティの合計
+        total_modules_used = model.new_int_var(0, horizon * num_resources, "total_modules_used")
+        if module_capacity_vars:
+            model.add(total_modules_used == cp_model.LinearExpr.sum(list(module_capacity_vars.values())))
         else:
-            # Reservoir constraint. Multi-mode compatible
-            reservoir_times = []
-            reservoir_demands = []
-            reservoir_actives = []
-            total_consumption_terms = []
-            for t in all_active_tasks:
-                num_recipes_t = len(problem.tasks[t].recipes)
-                for r in range(num_recipes_t):
-                    demand = task_resource_to_fixed_demands[(t, res)][r]
-                    if demand == 0:
-                        continue
-                    reservoir_times.append(task_starts[t])
-                    reservoir_demands.append(demand)
-                    is_recipe_r_active = task_to_presence_literals[t][r]
-                    reservoir_actives.append(is_recipe_r_active)
-                    total_consumption_terms.append(demand * is_recipe_r_active)
+            model.add(total_modules_used == 0)
+        model.minimize(total_modules_used)
 
-            min_capacity = 0
-            # Add multi-mode compatible reservoir constraint
-            model.AddReservoirConstraintWithActive(
-                reservoir_times,
-                reservoir_demands,
-                reservoir_actives,
-                min_capacity,
-                resource.max_capacity,
-            )
-            # Add constraint on the total consumption of the reservoir resource
-            model.add(
-                cp_model.LinearExpr.sum(total_consumption_terms) == 0
-            )
+    else: # --- メイクスパン最小化モード (デフォルト) ---
+        # 従来通りのロジック
+        for res in all_resources:
+            resource = problem.resources[res]
+            if resource.renewable:
+                model.add_cumulative([task_intervals[t] for t in all_active_tasks],
+                                     [task_to_resource_demands[t][res] for t in all_active_tasks],
+                                     resource.max_capacity)
+            else:
+                times, demands, actives = [], [], []
+                for t in all_active_tasks:
+                    for r, d in enumerate(task_resource_to_fixed_demands[(t, res)]):
+                        if d != 0:
+                            times.append(task_starts[t])
+                            demands.append(d)
+                            actives.append(task_to_presence_literals[t][r])
+                if times:
+                    model.AddReservoirConstraintWithActive(times, demands, actives, 0, resource.max_capacity)
+        model.minimize(makespan)
 
-    if problem.is_resource_investment:
-        objective = model.new_int_var(0, max_cost, "capacity_costs")
-        model.add(objective == sum(problem.resources[i].unit_cost * capacities[i] for i in range(len(capacities))))
-    else:
-        objective = makespan
-    model.minimize(objective)
-
+    # --- 共通の最終設定 (従来と同じ) ---
     task_starts[source] = model.new_constant(0)
     task_ends[source] = model.new_constant(0)
     task_to_presence_literals[0].append(model.new_constant(1))
@@ -1553,24 +1593,21 @@ def solve_rcpsp(
     task_to_presence_literals[sink].append(model.new_constant(1))
     is_present_literals[sink] = model.new_constant(1)
 
+    # --- ソルバー実行と結果の返却 ---
     if proto_file:
-        print(f"Writing proto to{proto_file}")
         model.export_to_file(proto_file)
-
     solver = cp_model.CpSolver()
     if params:
         text_format.Parse(params, solver.parameters)
     solver.parameters.log_search_progress = True
     status = solver.solve(model)
-
-    results = {
-        "solver": solver, "problem": problem, "all_active_tasks": all_active_tasks,
+    results = { "solver": solver, "problem": problem, "all_active_tasks": all_active_tasks,
         "all_resources": all_resources, "source": source, "sink": sink,
         "task_starts": task_starts, "task_ends": task_ends, "task_durations": task_durations,
         "task_to_presence_literals": task_to_presence_literals,
         "task_to_resource_demands": task_to_resource_demands,
         "task_resource_to_fixed_demands": task_resource_to_fixed_demands,
-    }
+        "module_capacities": module_capacity_vars }
     return status, results
 
 
@@ -1707,6 +1744,10 @@ def setup_rcpsp_problem(input_data: dict, combinations: dict) -> (rcpsp_pb2.Rcps
 
 
 def main(_):
+    # --- ユーザー設定項目：最適化モードを選択 ---
+    OPTIMIZATION_MODE = 'MINIMIZE_MODULES'  # 指定した時間内で、使用するモジュール総数を最小化
+    # OPTIMIZATION_MODE = 'MINIMIZE_MAKESPAN' # プロジェクト完了時間（メイクスパン）を最小化
+
     # Yamaguchi original
     # input_data = {
     #     "project_name": "TestTask",
@@ -1740,6 +1781,8 @@ def main(_):
 
     input_data = {
         "project_name": "Restaurant",
+        "makespan_limit": 70,
+        "module_handling_time": 5,
         "locations": [
             {"name": "kitchen", "max_robots": 2},
             {"name": "entrance", "max_robots": 1},
@@ -1796,7 +1839,6 @@ def main(_):
     # --- 1. データ準備 ---
     task_id_to_name, mode_to_name = create_name_mappings(input_data)
     renewable_id_to_name, reservoir_id_to_name = create_resource_name_mappings(input_data)
-    # task_name_to_required_caps = {task['name']: task['required_capabilities'] for task in input_data['tasks']}
 
     # 色設定を専用関数で実行
     resource_color_map, capability_color_map = create_color_maps(input_data)
@@ -1825,7 +1867,9 @@ def main(_):
         active_tasks=set(range(1, last_task)),
         optional_tasks={},
         source=0, sink=last_task,
-        num_actual_robots=num_actual_robots
+        num_actual_robots=num_actual_robots,
+        optimization_mode=OPTIMIZATION_MODE,
+        makespan_limit=input_data["makespan_limit"]
     )
 
     # --- 4. 結果の表示 ---
@@ -1845,6 +1889,7 @@ def main(_):
             resource_color_map=resource_color_map,
             irreducible_combinations=resolved_task_modes,
             input_data=input_data,
+            optimization_mode=OPTIMIZATION_MODE,
             **results,
         )
     elif status == cp_model.INFEASIBLE:
