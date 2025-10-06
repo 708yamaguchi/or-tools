@@ -1061,8 +1061,8 @@ def resolve_task_modes(input_data: dict) -> dict:
         # 最終的に生成されるフラットなモードリスト
         final_modes_for_task = []
 
+        # --- 変更点: "modes"キーの存在を必須とする ---
         if "modes" in task:
-            # 新フォーマット：'modes'リスト内の各モードを処理
             if not task["modes"]:
                 raise ValueError(f"Task '{task_name}' has an empty 'modes' list.")
 
@@ -1091,26 +1091,12 @@ def resolve_task_modes(input_data: dict) -> dict:
                         "resources": combo,
                         "required_caps": required_caps
                     })
-
-        elif "required_capabilities" in task:
-            # 従来フォーマット：タスクレベルの要求機能からモードを生成
-            required_caps = Counter(task["required_capabilities"])
-            combinations_for_task = _find_irreducible_covers(required_caps, all_resources)
-
-            if not combinations_for_task:
-                raise ValueError(
-                    f"Error: No resource combination found for task '{task_name}' "
-                    f"with requirements {dict(required_caps)}"
-                )
-
-            for combo in combinations_for_task:
-                final_modes_for_task.append({
-                    "duration": task["duration"],
-                    "resources": combo,
-                    "required_caps": required_caps
-                })
         else:
-            raise ValueError(f"Task '{task_name}' must have either 'modes' or 'required_capabilities' defined.")
+            # --- 変更点: 旧フォーマット("required_capabilities" at task level)を削除し、エラーを出す ---
+            raise ValueError(
+                f"Task '{task_name}' is missing the 'modes' key. "
+                f"Please define all execution modes within a 'modes' list. "
+                f"Example: 'modes': [{{'duration': 10, 'required_capabilities': {{'arm': 1}}}}]")
 
         # 全てのモードを試した結果、有効な実行方式が一つもなかった場合にエラーを出す
         if not final_modes_for_task:
@@ -1154,9 +1140,8 @@ def visualize_task_combinations(input_data, resolved_task_modes, cap_color_map, 
     line_count = 0
     for task in input_data["tasks"]:
         line_count += 2.5  # Taskヘッダー
-        if 'required_capabilities' in task: # 従来形式の場合
-             line_count += 2.7
-        if 'modes' in task: # 新形式の場合
+        # --- 変更点: "modes"しかないため、計算を簡略化 ---
+        if 'modes' in task:
              line_count += (len(task['modes']) * 1.5)
 
         # 各モードから展開された組み合わせの行数を加算
@@ -1184,16 +1169,12 @@ def visualize_task_combinations(input_data, resolved_task_modes, cap_color_map, 
         ax.text(0.5, y_pos, task_display_name, fontsize=label_fontsize + 2, fontweight='bold', va='center')
         y_pos -= 1.5
 
-        # タスク定義の表示 (required_capabilities または modes)
+        # --- 変更点: "modes"しかないため、表示ロジックを簡略化 ---
         if 'modes' in task:
             for i, mode_def in enumerate(task['modes']):
                 ax.text(1.0, y_pos, f"Mode {i+1} (Duration: {mode_def['duration']}) Requires:", fontsize=label_fontsize-1, va='center')
                 draw_capabilities(ax, Counter(mode_def['required_capabilities']), 3.0, y_pos, cap_color_map, aspect_correction=aspect_correction)
                 y_pos -= 1.2
-        elif 'required_capabilities' in task:
-             ax.text(1.0, y_pos, "Required:", fontsize=label_fontsize, va='center')
-             draw_capabilities(ax, Counter(task['required_capabilities']), 3.0, y_pos, cap_color_map, aspect_correction=aspect_correction)
-             y_pos -= 1.5
 
         y_pos -= 0.5
         ax.hlines(y=y_pos, xmin=1.0, xmax=9.0, colors='lightblue', linestyles='-')
@@ -1336,7 +1317,7 @@ def add_variable_capacity_reservoir_constraint(
     このRCPSP問題の特性を利用して、必要なモジュールの最小数を計算するための制約を構築します。
     内部では、モジュールの専有期間をインターバル（期間）変数として定義し、
     `AddCumulative`制約を用いて、同時に存在するインターバルの最大数（=必要なモジュール数）を
-    求めるモデルを構築します。これにより、容量自体を最適化変数として扱う
+    求めるモデルを構築できます。これにより、容量自体を最適化変数として扱う
     リソース投資問題を表現できます。
 
     ■ 元の `add_reservoir_constraint_with_active` との主な違い:
@@ -1748,9 +1729,9 @@ def setup_rcpsp_problem(input_data: dict, combinations: dict) -> (rcpsp_pb2.Rcps
 
 
 def main(_):
-    # 最適化モードを選択
-    OPTIMIZATION_MODE = 'MINIMIZE_MODULES'  # 指定した時間内で、使用するモジュール総数を最小化
-    # OPTIMIZATION_MODE = 'MINIMIZE_MAKESPAN' # プロジェクト完了時間（メイクスパン）を最小化
+    # 最適化モードを選択。'MINIMIZE_MAKESPAN'で最小makespanを確認し、それを基準に'MINIMIZE_MODULES'を使うと良い。
+    OPTIMIZATION_MODE = 'MINIMIZE_MAKESPAN' # プロジェクト完了時間（メイクスパン）を最小化
+    # OPTIMIZATION_MODE = 'MINIMIZE_MODULES'  # 指定した時間内で、使用するモジュール総数を最小化
 
     # タスク定義
     # predecessors: 先行タスク
@@ -1913,11 +1894,26 @@ def main(_):
                  {"duration": 30, "required_capabilities": {"arm": 2, "camera": 1, "gripper": 1}},
                  {"duration": 45, "required_capabilities": {"arm": 1,}},
              ]},
-            {"name": "accounting", "duration": 10, "required_capabilities": {"camera": 1}, "location": "casher"},
-            {"name": "wiping", "duration": 5, "required_capabilities": {"arm": 1, "cleaner": 1}, "location": "hall"},
-            {"name": "washing", "duration": 20, "required_capabilities": {"arm": 1, "camera": 1}, "location": "kitchen"},
-            {"name": "serving", "duration": 10, "required_capabilities": {"serve": 1}, "location": "hall", "predecessors": ["wiping", "cooking"]},
-            {"name": "cleaning", "duration": 5, "required_capabilities": {"gripper": 1, "cleaner": 1}, "location": "entrance"}
+            {"name": "accounting", "location": "casher",
+             "modes": [
+                 {"duration": 10, "required_capabilities": {"camera": 1}}
+             ]},
+            {"name": "wiping", "location": "hall",
+             "modes": [
+                 {"duration": 5, "required_capabilities": {"arm": 1, "cleaner": 1}}
+             ]},
+            {"name": "washing", "location": "kitchen",
+             "modes": [
+                 {"duration": 20, "required_capabilities": {"arm": 1, "camera": 1}}
+             ]},
+            {"name": "serving", "location": "hall", "predecessors": ["wiping", "cooking"],
+             "modes": [
+                 {"duration": 10, "required_capabilities": {"serve": 1}}
+             ]},
+            {"name": "cleaning", "location": "entrance",
+             "modes": [
+                 {"duration": 5, "required_capabilities": {"gripper": 1, "cleaner": 1}}
+             ]},
         ]
     }
 
