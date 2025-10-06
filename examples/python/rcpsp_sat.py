@@ -1178,8 +1178,6 @@ def visualize_task_combinations(input_data, resolved_task_modes, cap_color_map, 
 
         # タスク定義の表示 (required_capabilities または modes)
         if 'modes' in task:
-            # ax.text(1.0, y_pos, "Defined Modes:", fontsize=label_fontsize, va='center', style='italic')
-            # y_pos -= 1.0
             for i, mode_def in enumerate(task['modes']):
                 ax.text(1.0, y_pos, f"Mode {i+1} (Duration: {mode_def['duration']}) Requires:", fontsize=label_fontsize-1, va='center')
                 draw_capabilities(ax, Counter(mode_def['required_capabilities']), 3.0, y_pos, cap_color_map, aspect_correction=aspect_correction)
@@ -1192,9 +1190,6 @@ def visualize_task_combinations(input_data, resolved_task_modes, cap_color_map, 
         y_pos -= 0.5
         ax.hlines(y=y_pos, xmin=1.0, xmax=9.0, colors='lightblue', linestyles='-')
         y_pos -= 0.8
-        # ax.text(1.2, y_pos, "↓ Resolved Options (for Solver)", fontsize=label_fontsize-1, va='center', color='gray')
-        # y_pos -= 1.0
-
 
         # 解決された実行オプションの表示
         modes_for_task = resolved_task_modes[task['name']]
@@ -1314,7 +1309,6 @@ def solve_rcpsp(
     num_actual_robots: int,
 ) -> None:
     """Parse and solve a given RCPSP problem in proto format."""
-    # Create the model.
     model = cp_model.CpModel()
     model.name = problem.name
 
