@@ -68,7 +68,7 @@ def get_task_ids(task_index):
     return placement_id, work_id, retrieval_id
 
 
-def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=False):
+def generate_rcpsp_max_from_json(input_data, resolved_task_modes, debug_print=False):
     """
     JSON形式の入力データからRCPSP/max形式の文字列を生成します。
     また、ソルバーの解を可視化するために(タスク名, モード番号) -> [リソース名]の
@@ -174,8 +174,8 @@ def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=Fals
         task_index = n - 1
         task = tasks[task_index]
         task_name = task['name']
-        task_duration = task['duration']
-        combinations_for_task = task_combinations[task_name]
+        modes_for_task = resolved_task_modes[task_name]
+        combinations_for_task = [mode['resources'] for mode in modes_for_task]
 
         # 場所リソースのインデックスを特定
         task_location = task.get('location')
@@ -190,6 +190,8 @@ def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=Fals
         demands_placement, demands_work, demands_retrieval = {}, {}, {}
         placement_costs_by_mode, retrieval_costs_by_mode = {}, {}
 
+        work_costs_by_mode = {}  # Workアクティビティのモード別durationを格納
+
         num_work_modes = len(combinations_for_task) if combinations_for_task else 1
         num_placement_retrieval_modes = num_work_modes * num_actual_robots if combinations_for_task and num_actual_robots > 0 else 1
 
@@ -200,10 +202,13 @@ def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=Fals
             demands_retrieval[1] = [0] * total_resources
             placement_costs_by_mode[1] = 0
             retrieval_costs_by_mode[1] = 0
+            work_costs_by_mode[1] = 0
         else:
             # --- 作業(Work)モードのデマンド ---
             for i, combo in enumerate(combinations_for_task):
                 mode_num = i + 1
+                # 対応するモードのdurationを保存
+                work_costs_by_mode[mode_num] = modes_for_task[i]['duration']
                 mode_to_resources_map[(task_name, i)] = sorted(combo)
                 demands_w_mode = [0] * total_resources
                 robot_is_used = False
@@ -306,8 +311,10 @@ def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=Fals
             # 後続タスクがない場合、終了ノードをsuccessorとする
             retrieval_successors = [final_activity_id]
 
+
+        # Workアクティビティに'cost'の代わりに'costs_by_mode'を設定
         activities[placement_id] = {'modes': num_placement_retrieval_modes, 'successors': sorted(placement_successors), 'demands': demands_placement, 'costs_by_mode': placement_costs_by_mode}
-        activities[work_id] = {'cost': task_duration, 'modes': num_work_modes, 'successors': sorted(work_successors), 'demands': demands_work}
+        activities[work_id] = {'modes': num_work_modes, 'successors': sorted(work_successors), 'demands': demands_work, 'costs_by_mode': work_costs_by_mode}
         activities[retrieval_id] = {'modes': num_placement_retrieval_modes, 'successors': sorted(retrieval_successors), 'demands': demands_retrieval, 'costs_by_mode': retrieval_costs_by_mode}
 
         if debug_print:
@@ -753,7 +760,7 @@ def _plot_gantt_chart(
     ax, solver, all_task_ids,
     executed_tasks, task_starts, task_durations,
     selected_recipes, task_id_to_name,
-    task_name_to_required_caps,
+    recipe_to_caps_map,
     mode_to_resources_map,
     capability_color_map,
     resource_color_map,
@@ -830,25 +837,30 @@ def _plot_gantt_chart(
 
         # 1. 要求Capabilityの楕円を左側に描画 (Placement/Retrievalでは省略)
         if not (task_name_full.startswith("Placement-") or task_name_full.startswith("Retrieval-")):
-            if base_task_name in task_name_to_required_caps:
-                required_caps_dict = task_name_to_required_caps[base_task_name]
-                # 辞書から capability-count のペアをリストに展開
-                caps_to_draw = []
-                for cap, count in sorted(required_caps_dict.items()):
-                    caps_to_draw.extend([cap] * count)
-                num_caps = len(caps_to_draw)
-                start_y = i - (num_caps - 1) * 0.15
-                for j, cap in enumerate(caps_to_draw):
-                    color = capability_color_map.get(cap, "grey")
-                    center_y = start_y + j * 0.3
-                    ellipse = patches.Ellipse(
-                        xy=(-1.5, center_y),
-                        width=1.2,
-                        height=0.25,
-                        facecolor=color, edgecolor="black", linewidth=0.5,
-                        clip_on=False
-                    )
-                    ax.add_patch(ellipse)
+            recipe_idx = selected_recipes.get(t)
+            # レシピ番号が取得できた場合のみ描画を試みる
+            if recipe_idx is not None:
+                # 新しいマップから、選択されたレシピに対応する要求機能を取得
+                required_caps_dict = recipe_to_caps_map.get((base_task_name, recipe_idx))
+                
+                if required_caps_dict:
+                    # 辞書から capability-count のペアをリストに展開
+                    caps_to_draw = []
+                    for cap, count in sorted(required_caps_dict.items()):
+                        caps_to_draw.extend([cap] * count)
+                    num_caps = len(caps_to_draw)
+                    start_y = i - (num_caps - 1) * 0.15
+                    for j, cap in enumerate(caps_to_draw):
+                        color = capability_color_map.get(cap, "grey")
+                        center_y = start_y + j * 0.3
+                        ellipse = patches.Ellipse(
+                            xy=(-1.5, center_y),
+                            width=1.2,
+                            height=0.25,
+                            facecolor=color, edgecolor="black", linewidth=0.5,
+                            clip_on=False
+                        )
+                        ax.add_patch(ellipse)
 
         # 2. タスクバーを描画
         if t in executed_tasks and t in selected_recipes:
@@ -912,7 +924,7 @@ def visualize_schedule_only(
     all_active_tasks, executed_tasks, task_starts,
     task_durations, selected_recipes,
     task_id_to_name, mode_to_name, title,
-    task_name_to_required_caps,
+    recipe_to_caps_map,
     mode_to_resources_map,
     capability_color_map,
     resource_color_map,
@@ -962,7 +974,7 @@ def visualize_schedule_only(
         ax, solver, sorted_task_ids, set(executed_tasks),
         task_starts, task_durations, selected_recipes,
         task_id_to_name,
-        task_name_to_required_caps,
+        recipe_to_caps_map,
         mode_to_resources_map,
         capability_color_map,
         resource_color_map,
@@ -990,80 +1002,117 @@ def visualize_schedule_only(
     plt.show()
 
 
-def calculate_all_task_combinations(input_data):
+def resolve_task_modes(input_data: dict) -> dict:
     """
-    input_dataを受け取り、各タスクの要求（機能ごとの必要個数）を満たす
-    「既約」なリソースの組み合わせを全パターン計算して返します。
-    いずれかのタスクで有効な組み合わせが見つからない場合はValueErrorを発生させます。
+    入力データ内の各タスクについて、実行モードを解決します。
+    - 'modes'キーが存在する場合：
+        ユーザー定義の各モードについて、その'required_capabilities'を満たす
+        リソースの組み合わせをそれぞれ計算し、全ての組み合わせをフラットな
+        モードリストとして生成します。
+    - 'required_capabilities'キーが存在する場合（従来形式）：
+        機能要件を満たすリソースの組み合わせを自動計算し、モードとして生成します。
     """
+
     def _find_irreducible_covers(required_caps_counter, available_resources):
         """
-        required_caps_counter: Counter({"arm": 2, "camera": 1}) のような要求
-        available_resources: 利用可能なリソースのリスト
+        機能要件(required_caps_counter)を満たす、既約なリソースの組み合わせを見つけます。
         """
         if not required_caps_counter:
             return [[]]
 
         all_valid_covers = []
-        # 1から利用可能なリソース数までの全ての組み合わせを試す
         for i in range(1, len(available_resources) + 1):
             for combo in combinations(available_resources, i):
-                # 組み合わせが提供する機能の合計をCounterで計算
                 provided_caps_counter = Counter()
                 for res in combo:
                     provided_caps_counter.update(res["capabilities"])
-
-                # 要求される全ての機能が必要な数だけ満たされているかチェック
-                # (required - provided)の結果が空（全ての要素が0以下）なら条件を満たす
                 if not (required_caps_counter - provided_caps_counter):
                     all_valid_covers.append(list(combo))
 
-        # 既約な解（それ以上リソースを減らせない組み合わせ）のみを抽出
         irreducible_solutions = []
         for combo in all_valid_covers:
             is_irreducible = True
             if len(combo) > 1:
-                # 組み合わせから1つリソースを取り除いたサブセットを全通り試す
                 for sub_combo in combinations(combo, len(combo) - 1):
                     sub_provided_caps = Counter()
                     for res in sub_combo:
                         sub_provided_caps.update(res["capabilities"])
-
-                    # サブセットでも要求を満たせるなら、元のcomboは既約ではない
                     if not (required_caps_counter - sub_provided_caps):
                         is_irreducible = False
                         break
-
             if is_irreducible:
-                # 重複を避けるため、リソース名をソートして追加
                 solution_names = sorted([res["name"] for res in combo])
                 if solution_names not in irreducible_solutions:
                     irreducible_solutions.append(solution_names)
 
         return irreducible_solutions
 
+    resolved_modes = {}
     all_resources = input_data["resources"]["robot"] + input_data["resources"]["module"]
-    all_task_combinations = {}
 
     for task in input_data["tasks"]:
         task_name = task["name"]
-        # 要求ケイパビリティをCounterオブジェクトに変換
-        required_capabilities = Counter(task["required_capabilities"])
+        
+        # 最終的に生成されるフラットなモードリスト
+        final_modes_for_task = []
 
-        combinations_for_task = _find_irreducible_covers(required_capabilities, all_resources)
+        if "modes" in task:
+            # 新フォーマット：'modes'リスト内の各モードを処理
+            if not task["modes"]:
+                raise ValueError(f"Task '{task_name}' has an empty 'modes' list.")
 
-        # 組み合わせが見つからない場合はエラー
-        if not combinations_for_task:
-            raise ValueError(
-                f"[calculate_all_task_combinations] Error: No resource combination found for task '{task_name}' "
-                f"with requirements {dict(required_capabilities)}"
-            )
+            for i, mode_def in enumerate(task["modes"]):
+                if "duration" not in mode_def or "required_capabilities" not in mode_def:
+                    raise ValueError(f"Invalid mode definition in task '{task_name}'. Each mode must have 'duration' and 'required_capabilities'.")
+                
+                duration = mode_def["duration"]
+                required_caps = Counter(mode_def["required_capabilities"])
+                
+                # このモードの要求機能を満たすリソースの組み合わせを計算
+                combinations_for_mode = _find_irreducible_covers(required_caps, all_resources)
+                
+                if not combinations_for_mode:
+                    raise ValueError(
+                        f"Error in task '{task_name}', mode {i+1}: No resource combination found "
+                        f"for requirements {dict(required_caps)}"
+                    )
 
-        all_task_combinations[task_name] = combinations_for_task
+                # 見つかった各組み合わせを、対応するdurationを持つ最終モードとして追加
+                for combo in combinations_for_mode:
+                    final_modes_for_task.append({
+                        "duration": duration,
+                        "resources": combo,
+                        "required_caps": required_caps
+                    })
 
-    return all_task_combinations
+        elif "required_capabilities" in task:
+            # 従来フォーマット：タスクレベルの要求機能からモードを生成
+            required_caps = Counter(task["required_capabilities"])
+            combinations_for_task = _find_irreducible_covers(required_caps, all_resources)
 
-# <<< 変更点: 機能の個数を描画できるように変更 >>>
+            if not combinations_for_task:
+                raise ValueError(
+                    f"Error: No resource combination found for task '{task_name}' "
+                    f"with requirements {dict(required_caps)}"
+                )
+            
+            for combo in combinations_for_task:
+                final_modes_for_task.append({
+                    "duration": task["duration"],
+                    "resources": combo,
+                    "required_caps": required_caps
+                })
+        else:
+            raise ValueError(f"Task '{task_name}' must have either 'modes' or 'required_capabilities' defined.")
+        
+        if not final_modes_for_task:
+            raise ValueError(f"Could not resolve any valid execution mode for task '{task_name}'.")
+
+        resolved_modes[task_name] = final_modes_for_task
+
+    return resolved_modes
+
+
 def draw_capabilities(ax, capabilities_counter, x_start, y_pos, cap_color_map, patch_size=0.6, patch_margin=0.1, aspect_correction=1.0):
     """
     与えられたCounterに基づき、機能のシンボルを必要な個数だけ描画します。
@@ -1085,8 +1134,7 @@ def draw_capabilities(ax, capabilities_counter, x_start, y_pos, cap_color_map, p
             )
             ax.add_patch(ellipse)
 
-# <<< 変更点: 新しいデータ形式に対応 >>>
-def visualize_task_combinations(input_data, calculated_combinations, cap_color_map, resource_color_map, title_fontsize=16, label_fontsize=12):
+def visualize_task_combinations(input_data, resolved_task_modes, cap_color_map, resource_color_map, title_fontsize=16, label_fontsize=12):
     all_resources = input_data["resources"]["robot"] + input_data["resources"]["module"]
 
     # 全てのユニークなケイパビリティを取得
@@ -1094,11 +1142,21 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
     for res in all_resources:
         all_capabilities.update(res["capabilities"])
 
-    line_count = sum(2.5 + sum(len(combo) + 1 + 0.5 for combo in calculated_combinations[task['name']]) + 1.5
-                     for task in input_data["tasks"])
+    # 表示行数の計算ロジックを修正
+    line_count = 0
+    for task in input_data["tasks"]:
+        line_count += 2.5  # Taskヘッダー
+        if 'required_capabilities' in task: # 従来形式の場合
+             line_count += 2.7
+        if 'modes' in task: # 新形式の場合
+             line_count += (len(task['modes']) * 1.5)
+        
+        # 各モードから展開された組み合わせの行数を加算
+        modes_for_task = resolved_task_modes[task['name']]
+        line_count += sum(len(mode['resources']) + 1.5 for mode in modes_for_task)
+
 
     fig, ax = plt.subplots(figsize=(14, line_count * 0.4))
-
     ax.set_xlim(0, 10)
     ax.set_ylim(0, line_count)
     ax.axis('off')
@@ -1116,28 +1174,43 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
         if 'location' in task:
             task_display_name += f"  @ {task['location']}"
         ax.text(0.5, y_pos, task_display_name, fontsize=label_fontsize + 2, fontweight='bold', va='center')
-
-        y_pos -= 1.2
-        ax.text(1.0, y_pos, "Required:", fontsize=label_fontsize, va='center')
-
-        # Counterに変換して描画関数に渡す
-        required_caps_counter = Counter(task['required_capabilities'])
-        draw_capabilities(ax, required_caps_counter, 2.0, y_pos, cap_color_map, aspect_correction=aspect_correction)
-
         y_pos -= 1.5
-        combinations_for_task = calculated_combinations[task['name']]
-        for i, combo in enumerate(combinations_for_task):
-            ax.text(1.5, y_pos, f"Solution {i+1}", fontsize=label_fontsize, va='center', style='italic', color='navy')
+
+        # タスク定義の表示 (required_capabilities または modes)
+        if 'modes' in task:
+            # ax.text(1.0, y_pos, "Defined Modes:", fontsize=label_fontsize, va='center', style='italic')
+            # y_pos -= 1.0
+            for i, mode_def in enumerate(task['modes']):
+                ax.text(1.0, y_pos, f"Mode {i+1} (Duration: {mode_def['duration']}) Requires:", fontsize=label_fontsize-1, va='center')
+                draw_capabilities(ax, Counter(mode_def['required_capabilities']), 3.0, y_pos, cap_color_map, aspect_correction=aspect_correction)
+                y_pos -= 1.2
+        elif 'required_capabilities' in task:
+             ax.text(1.0, y_pos, "Required:", fontsize=label_fontsize, va='center')
+             draw_capabilities(ax, Counter(task['required_capabilities']), 3.0, y_pos, cap_color_map, aspect_correction=aspect_correction)
+             y_pos -= 1.5
+        
+        y_pos -= 0.5
+        ax.hlines(y=y_pos, xmin=1.0, xmax=9.0, colors='lightblue', linestyles='-')
+        y_pos -= 0.8
+        # ax.text(1.2, y_pos, "↓ Resolved Options (for Solver)", fontsize=label_fontsize-1, va='center', color='gray')
+        # y_pos -= 1.0
+
+
+        # 解決された実行オプションの表示
+        modes_for_task = resolved_task_modes[task['name']]
+        for i, mode in enumerate(modes_for_task):
+            duration = mode['duration']
+            ax.text(1.5, y_pos, f"Option {i+1} (Duration: {duration})", fontsize=label_fontsize, va='center', style='italic', color='navy')
             y_pos -= 1
-            for resource_name in combo:
+            for resource_name in mode['resources']:
                 ax.text(2.0, y_pos, f"• {resource_name}", fontsize=label_fontsize - 1, va='center')
                 resource_data = next((r for r in all_resources if r["name"] == resource_name), None)
                 if resource_data:
-                    # リソースが持つケイパビリティもCounterに変換して描画
                     resource_caps_counter = Counter(resource_data['capabilities'])
                     draw_capabilities(ax, resource_caps_counter, 3.8, y_pos, cap_color_map, aspect_correction=aspect_correction)
                 y_pos -= 1
             y_pos -= 0.5
+
         y_pos += 1
         if task != input_data["tasks"][-1]:
              ax.hlines(y=y_pos, xmin=0.5, xmax=9.5, colors='lightgray', linestyles='--')
@@ -1165,7 +1238,7 @@ def _process_and_display_solution(
     task_id_to_name, mode_to_name, renewable_id_to_name,
     reservoir_id_to_name,
     num_actual_robots, num_actual_modules,
-    task_name_to_required_caps,
+    recipe_to_caps_map,
     mode_to_resources_map,
     capability_color_map,
     resource_color_map,
@@ -1220,7 +1293,7 @@ def _process_and_display_solution(
         all_active_tasks, executed_tasks, task_starts,
         task_durations, selected_recipes,
         task_id_to_name, mode_to_name, "Task Schedule Gantt Chart",
-        task_name_to_required_caps,
+        recipe_to_caps_map,
         mode_to_resources_map,
         capability_color_map,
         resource_color_map,
@@ -1519,19 +1592,25 @@ def create_color_maps(input_data: dict) -> (dict, dict):
     resource_color_map = {}
 
     if renewable_names:
-        renewable_cmap = cm.get_cmap('Blues')
+        renewable_cmap = plt.get_cmap('Blues')
         points = np.linspace(0.4, 0.9, len(renewable_names))
         colors = renewable_cmap(points)
         for name, color in zip(renewable_names, colors):
             resource_color_map[name] = color
     if reservoir_names:
-        reservoir_cmap = cm.get_cmap('tab10')
+        reservoir_cmap = plt.get_cmap('tab10')
         colors = [reservoir_cmap((i + 1) % 10) for i in range(len(reservoir_names))]
         for name, color in zip(reservoir_names, colors):
             resource_color_map[name] = color
+    
     all_caps_set = set()
     for task in input_data["tasks"]:
-        all_caps_set.update(task["required_capabilities"].keys())
+        if 'modes' in task:
+            for mode in task['modes']:
+                if 'required_capabilities' in mode:
+                    all_caps_set.update(mode["required_capabilities"].keys())
+        elif 'required_capabilities' in task:
+            all_caps_set.update(task["required_capabilities"].keys())
     for res_type in ["robot", "module"]:
         for res in input_data["resources"][res_type]:
             all_caps_set.update(res["capabilities"])
@@ -1687,10 +1766,14 @@ def main(_):
         # predecessors: 先行タスク
         # RCPSP/max形式ではsuccessors（後続タスク）を指定しているが、人間にとってはpredecessors指定が分かりやすいはず
         "tasks": [
-            {"name": "cooking", "duration": 30, "required_capabilities": {"arm": 2, "camera": 1, "gripper": 1}, "location": "kitchen"},
+            {"name": "cooking", "location": "kitchen",
+             "modes": [
+                 {"duration": 30, "required_capabilities": {"arm": 2, "camera": 1, "gripper": 1}},
+                 {"duration": 45, "required_capabilities": {"arm": 1,}},
+             ]},
             {"name": "accounting", "duration": 10, "required_capabilities": {"camera": 1}, "location": "casher"},
             {"name": "wiping", "duration": 5, "required_capabilities": {"arm": 1, "cleaner": 1}, "location": "hall"},
-            # {"name": "washing", "duration": 20, "required_capabilities": {"arm": 1, "camera": 1}, "location": "kitchen"},
+            {"name": "washing", "duration": 20, "required_capabilities": {"arm": 1, "camera": 1}, "location": "kitchen"},
             {"name": "serving", "duration": 10, "required_capabilities": {"serve": 1}, "location": "hall", "predecessors": ["wiping", "cooking"]},
             {"name": "cleaning", "duration": 5, "required_capabilities": {"gripper": 1, "cleaner": 1}, "location": "entrance"}
         ]
@@ -1719,20 +1802,26 @@ def main(_):
     # --- 1. データ準備 ---
     task_id_to_name, mode_to_name = create_name_mappings(input_data)
     renewable_id_to_name, reservoir_id_to_name = create_resource_name_mappings(input_data)
-    task_name_to_required_caps = {task['name']: task['required_capabilities'] for task in input_data['tasks']}
+    # task_name_to_required_caps = {task['name']: task['required_capabilities'] for task in input_data['tasks']}
 
     # 色設定を専用関数で実行
     resource_color_map, capability_color_map = create_color_maps(input_data)
 
     try:
-        irreducible_combinations = calculate_all_task_combinations(input_data)
+        resolved_task_modes = resolve_task_modes(input_data)
     except ValueError as e:
         print(e)
         return
 
+    recipe_to_caps_map = {}
+    for task_name, modes in resolved_task_modes.items():
+        for i, mode in enumerate(modes):
+            # Workタスク名(例: cooking)とレシピ番号をキーにする
+            recipe_to_caps_map[(task_name, i)] = mode['required_caps']
+
     # --- 2. 問題の構築 ---
     # RCPSP問題のセットアップを専用関数で実行
-    problem, mode_to_resources_map = setup_rcpsp_problem(input_data, irreducible_combinations)
+    problem, mode_to_resources_map = setup_rcpsp_problem(input_data, resolved_task_modes)
 
     # --- 3. ソルバーの実行 ---
     num_actual_robots = len(input_data["resources"]["robot"])
@@ -1756,11 +1845,11 @@ def main(_):
             reservoir_id_to_name=reservoir_id_to_name,
             num_actual_robots=num_actual_robots,
             num_actual_modules=num_actual_modules,
-            task_name_to_required_caps=task_name_to_required_caps,
+            recipe_to_caps_map=recipe_to_caps_map,
             mode_to_resources_map=mode_to_resources_map,
             capability_color_map=capability_color_map,
             resource_color_map=resource_color_map,
-            irreducible_combinations=irreducible_combinations,
+            irreducible_combinations=resolved_task_modes,
             input_data=input_data,
             **results,
         )
