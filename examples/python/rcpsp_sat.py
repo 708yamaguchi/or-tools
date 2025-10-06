@@ -113,7 +113,7 @@ def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=Fals
     num_locations = len(locations)
     location_map = {loc['name']: i for i, loc in enumerate(locations)}
 
-    # リソース数の定義を変更
+    # リソース数の定義
     num_renewable = num_actual_robots + num_actual_modules + num_locations
     num_reservoir = num_actual_modules
     total_resources = num_renewable + num_reservoir
@@ -134,9 +134,36 @@ def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=Fals
         for name, idx in module_map.items():
             id_to_resource_name[num_renewable + idx] = f"Module(Reservoir):{name}"
 
+    # --- 先行関係の解析 ---
+    task_name_to_ids = {}
+    for n in range(1, N + 1):
+        task_name = tasks[n - 1]['name']
+        p_id, w_id, r_id = get_task_ids(n)
+        task_name_to_ids[task_name] = {'placement': p_id, 'work': w_id, 'retrieval': r_id}
+
+    # 各タスクの後続タスクをマッピングする辞書を作成
+    # 例: {'task_A': ['task_B'], 'task_C': []}  (BはAの後に実行)
+    successors_map = collections.defaultdict(list)
+    predecessors_map = collections.defaultdict(list)
+    all_task_names = set(task_name_to_ids.keys())
+    tasks_with_predecessors = set()
+
+    for task in tasks:
+        task_name = task['name']
+        for pred_name in task.get('predecessors', []):
+            if pred_name in all_task_names:
+                successors_map[pred_name].append(task_name)
+                predecessors_map[task_name].append(pred_name)
+                tasks_with_predecessors.add(task_name)
+
+    # 先行タスクを持たないタスク（プロジェクトの開始点となりうるタスク）を特定
+    start_tasks = all_task_names - tasks_with_predecessors
+
     # 2. アクティビティ情報の構築
     activities = {}
-    start_successors = [id for n in range(1, N + 1) for id in (3 * n - 2, 3 * n - 1)]
+
+    # スタートノード(ID=0)の後続を、先行関係を持たないタスクのPlacementアクティビティに設定
+    start_successors = [task_name_to_ids[name]['placement'] for name in start_tasks]
     activities[0] = {
         'cost': 0, 'modes': 1, 'successors': sorted(start_successors),
         'demands': {1: [0] * total_resources}
@@ -156,7 +183,7 @@ def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=Fals
             location_resource_idx = num_actual_robots + num_actual_modules + location_map[task_location]
 
 
-        placement_id, work_id, retrieval_id = 3*n-2, 3*n-1, 3*n
+        placement_id, work_id, retrieval_id = get_task_ids(n)
         final_activity_id = 3 * N + 1
 
         demands_placement, demands_work, demands_retrieval = {}, {}, {}
@@ -261,14 +288,32 @@ def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=Fals
                         total_resources=total_resources
                     )
 
-        activities[placement_id] = {'modes': num_placement_retrieval_modes, 'successors': [work_id], 'demands': demands_placement, 'costs_by_mode': placement_costs_by_mode}
-        activities[work_id] = {'cost': task_duration, 'modes': num_work_modes, 'successors': [retrieval_id], 'demands': demands_work}
-        activities[retrieval_id] = {'modes': num_placement_retrieval_modes, 'successors': [final_activity_id], 'demands': demands_retrieval, 'costs_by_mode': retrieval_costs_by_mode}
+        # --- 後続関係の設定 ---
+        # 1. Placement -> Work
+        placement_successors = [work_id]
+
+        # 2. Work -> Retrieval
+        work_successors = [retrieval_id]
+
+        # 3. Retrieval -> 次のタスクのPlacement または 終了ノード
+        #    現在のタスク(task_name)の後続タスクを取得
+        dependent_task_names = successors_map.get(task_name, [])
+        if dependent_task_names:
+            # 後続タスクがある場合、それらのPlacementアクティビティをsuccessorとする
+            retrieval_successors = [task_name_to_ids[name]['placement'] for name in dependent_task_names]
+        else:
+            # 後続タスクがない場合、終了ノードをsuccessorとする
+            retrieval_successors = [final_activity_id]
+
+        activities[placement_id] = {'modes': num_placement_retrieval_modes, 'successors': sorted(placement_successors), 'demands': demands_placement, 'costs_by_mode': placement_costs_by_mode}
+        activities[work_id] = {'cost': task_duration, 'modes': num_work_modes, 'successors': sorted(work_successors), 'demands': demands_work}
+        activities[retrieval_id] = {'modes': num_placement_retrieval_modes, 'successors': sorted(retrieval_successors), 'demands': demands_retrieval, 'costs_by_mode': retrieval_costs_by_mode}
 
         if debug_print:
             print(f"\n" + "="*15 + f" DEBUG: Task {n} ({task_name}) " + "="*15)
             print(f"  Location: {task_location}")
             print(f"  Activity IDs: Placement={placement_id}, Work={work_id}, Retrieval={retrieval_id}")
+            print(f"  Successors: P:{activities[placement_id]['successors']} -> W:{activities[work_id]['successors']} -> R:{activities[retrieval_id]['successors']}")
 
             def get_demands_str(demands_list):
                 consumed = []
@@ -280,7 +325,7 @@ def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=Fals
 
             # --- Placement Activity ---
             print(f"\n  -> Activity: Placement ({num_placement_retrieval_modes} modes)")
-            modes_to_show = list(demands_placement.keys())            
+            modes_to_show = list(demands_placement.keys())
             for mode_idx in modes_to_show:
                 if mode_idx == '...':
                     print("     ...")
@@ -320,7 +365,7 @@ def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=Fals
     output_lines = []
     output_lines.append(f"{3 * N} {num_renewable} {num_reservoir} 0") # ヘッダーを更新
 
-    # 先行関係ブロック (変更なし)
+    # 先行関係ブロック
     for i in sorted(activities.keys()):
         act = activities[i]
         num_succ = len(act['successors'])
@@ -342,7 +387,7 @@ def generate_rcpsp_max_from_json(input_data, task_combinations, debug_print=Fals
             line_parts.append(' '.join(delay_str_parts))
         output_lines.append(' '.join(line_parts))
 
-    # リソース消費ブロック (変更なし)
+    # リソース消費ブロック
     for i in sorted(activities.keys()):
         act = activities[i]
         for mode_num, demands in sorted(act['demands'].items()):
@@ -759,7 +804,7 @@ def _plot_gantt_chart(
                 y_pos_bottom = y_range['end'] + 0.35
                 label = f"{info['name'].upper()} (Max: {info['max_robots']})"
                 ax.text(-7, y_pos_bottom, label,
-                        va='bottom',  # 垂直方向の配置基準を 'bottom' に変更
+                        va='bottom',
                         ha='left',
                         fontsize=label_fontsize,
                         fontweight='bold', color='black',
@@ -1032,7 +1077,7 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
             ax.text(1.5, y_pos, f"Solution {i+1}", fontsize=label_fontsize, va='center', style='italic', color='navy')
             y_pos -= 1
             for resource_name in combo:
-                ax.text(2.0, y_pos, f"• {resource_name}", fontsize=label_fontsize - 1, va='center')
+                ax.text(2.0, y_pos, f"  {resource_name}", fontsize=label_fontsize - 1, va='center')
                 resource_data = next((r for r in all_resources if r["name"] == resource_name), None)
                 if resource_data:
                     draw_capabilities(ax, resource_data['capabilities'], 3.8, y_pos, cap_color_map, aspect_correction=aspect_correction)
@@ -1440,6 +1485,72 @@ def create_color_maps(input_data: dict) -> (dict, dict):
 
     return resource_color_map, capability_color_map
 
+
+def print_rcpsp_precedence_graph(rcpsp_data_string: str, input_data: dict):
+    """
+    RCPSP/max形式のデータ文字列を解析し、タスクの先行順序（依存関係グラフ）を
+    人間が読みやすい形式で表示します。
+
+    Args:
+        rcpsp_data_string (str): generate_rcpsp_max_from_jsonから返されたRCPSP/max形式の文字列。
+        input_data (dict): タスク名を取得するための元の入力データ。
+    """
+    print("\n" + "="*20 + " Human-Readable Precedence Graph " + "="*20)
+    print("(P): Placement (W) Work (R) Retrieval")
+
+    # 1. まず、IDからタスク名への変換辞書を作成する
+    id_to_name = {}
+    tasks = input_data.get('tasks', [])
+    N = len(tasks)
+    id_to_name[0] = "Start"
+    for n in range(1, N + 1):
+        task_name = tasks[n - 1]['name']
+        p_id, w_id, r_id = 3 * n - 2, 3 * n - 1, 3 * n
+        id_to_name[p_id] = f"{task_name}(P)"
+        id_to_name[w_id] = f"{task_name}(W)" # Workを追加して明確化
+        id_to_name[r_id] = f"{task_name}(R)"
+    finish_id = 3 * N + 1
+    id_to_name[finish_id] = "Finish"
+
+    # 2. RCPSP/max文字列の先行関係ブロックを解析する
+    lines = rcpsp_data_string.strip().split('\n')
+
+    # ヘッダー行から総アクティビティ数を取得
+    num_activities = int(lines[0].split()[0])
+
+    # 先行関係が定義されているのは、ヘッダーの次の行から (Start, Activities, Finish) の分
+    precedence_lines = lines[1 : 1 + num_activities + 2]
+
+    # 3. 解析結果を分かりやすく表示する
+    for line in precedence_lines:
+        # リソース定義ブロックの行などをスキップ
+        if not line.strip() or not line.strip()[0].isdigit():
+            continue
+
+        # 遅延情報 `[...]` を除外してパース
+        parts = line.split('[')[0].strip().split()
+        if len(parts) < 3:
+            continue
+
+        task_id = int(parts[0])
+        num_successors = int(parts[2])
+
+        task_name = id_to_name.get(task_id, f"Unknown ID {task_id}")
+
+        print(f"■ {task_name} (ID: {task_id})")
+
+        if num_successors > 0:
+            successor_ids = [int(s) for s in parts[3 : 3 + num_successors]]
+            for succ_id in successor_ids:
+                succ_name = id_to_name.get(succ_id, f"Unknown ID {succ_id}")
+                print(f"  └─> {succ_name} (ID: {succ_id})")
+        else:
+            # 通常はFinishノードのみが該当
+            print("  └─> (End of Project)")
+
+    print("=" * 67 + "\n")
+
+
 def setup_rcpsp_problem(input_data: dict, combinations: dict) -> (rcpsp_pb2.RcpspProblem, dict):
     """
     入力データをRCPSP形式に変換し、ソルバー用の問題オブジェクトをセットアップします。
@@ -1449,6 +1560,8 @@ def setup_rcpsp_problem(input_data: dict, combinations: dict) -> (rcpsp_pb2.Rcps
     print("\n" + "="*25 + " RCPSP/max Data " + "="*25)
     print(rcpsp_data_string)
     print("="*66 + "\n")
+
+    print_rcpsp_precedence_graph(rcpsp_data_string, input_data)
 
     rcpsp_parser = rcpsp.RcpspParser()
     # withステートメントで一時ファイルを安全に扱う
@@ -1495,54 +1608,56 @@ def main(_):
     #     ]
     # }
 
-    # input_data = {
-    #     "project_name": "Restaurant",
-    #     "locations": [
-    #         {"name": "kitchen", "max_robots": 2},
-    #         {"name": "entrance", "max_robots": 1},
-    #         {"name": "hall", "max_robots": 2},
-    #         {"name": "casher", "max_robots": 1}
-    #     ],
-    #     "resources": {
-    #         "robot": [
-    #             {"name": "r8_r", "quantity": 1, "capabilities": ["arm", "camera", "gripper", "serve"]},
-    #         ],
-    #         "module": [
-    #             {"name": "arm_m", "quantity": 4, "capabilities": ["arm", "camera", "cleaner"]},
-    #             {"name": "camera_m", "quantity": 3, "capabilities": ["camera"]},
-    #             {"name": "gripper_m", "quantity": 2, "capabilities": ["gripper"]},
-    #             {"name": "cleaner_m", "quantity": 2, "capabilities": ["cleaner"]}
-    #         ]
-    #     },
-    #     "tasks": [
-    #         {"name": "cooking", "duration": 30, "required_capabilities": ["arm", "camera", "gripper"], "location": "kitchen"},
-    #         {"name": "accounting", "duration": 10, "required_capabilities": ["camera"], "location": "casher"},
-    #         {"name": "wiping", "duration": 5, "required_capabilities": ["arm", "cleaner"], "location": "hall"},
-    #         {"name": "washing", "duration": 20, "required_capabilities": ["arm", "camera"], "location": "kitchen"},
-    #         {"name": "serving", "duration": 10, "required_capabilities": ["serve"], "location": "hall"},
-    #         {"name": "cleaning", "duration": 5, "required_capabilities": ["gripper", "cleaner"], "location": "entrance"}
-    #     ]
-    # }
-
     input_data = {
-        "project_name": "Simple cleaning",
+        "project_name": "Restaurant",
         "locations": [
-            {"name": "kitchen", "max_robots": 1},
+            {"name": "kitchen", "max_robots": 2},
             {"name": "entrance", "max_robots": 1},
+            {"name": "hall", "max_robots": 2},
+            {"name": "casher", "max_robots": 1}
         ],
         "resources": {
             "robot": [
-                {"name": "r8_r", "quantity": 1, "capabilities": ["dual_arm"]},
+                {"name": "r8_r", "quantity": 1, "capabilities": ["arm", "camera", "gripper", "serve"]},
             ],
             "module": [
-                {"name": "arm_m", "quantity": 3, "capabilities": ["arm"]},
+                {"name": "arm_m", "quantity": 4, "capabilities": ["arm", "camera", "cleaner"]},
+                {"name": "camera_m", "quantity": 3, "capabilities": ["camera"]},
+                {"name": "gripper_m", "quantity": 2, "capabilities": ["gripper"]},
+                {"name": "cleaner_m", "quantity": 2, "capabilities": ["cleaner"]}
             ]
         },
+        # predecessors: 先行タスク
+        # RCPSP/max形式ではsuccessors（後続タスク）を指定しているが、人間にとってはpredecessors指定が分かりやすいはず
         "tasks": [
-            {"name": "wiping", "duration": 5, "required_capabilities": ["arm"], "location": "kitchen"},
-            {"name": "cleaning", "duration": 5, "required_capabilities": ["dual_arm"], "location": "entrance"}
+            {"name": "cooking", "duration": 30, "required_capabilities": ["arm", "camera", "gripper"], "location": "kitchen"},
+            {"name": "accounting", "duration": 10, "required_capabilities": ["camera"], "location": "casher"},
+            {"name": "wiping", "duration": 5, "required_capabilities": ["arm", "cleaner"], "location": "hall"},
+            {"name": "washing", "duration": 20, "required_capabilities": ["arm", "camera"], "location": "kitchen"},
+            {"name": "serving", "duration": 10, "required_capabilities": ["serve"], "location": "hall", "predecessors": ["wiping", "cooking"]},
+            {"name": "cleaning", "duration": 5, "required_capabilities": ["gripper", "cleaner"], "location": "entrance"}
         ]
     }
+
+    # input_data = {
+    #     "project_name": "Simple cleaning",
+    #     "locations": [
+    #         {"name": "kitchen", "max_robots": 1},
+    #         {"name": "entrance", "max_robots": 1},
+    #     ],
+    #     "resources": {
+    #         "robot": [
+    #             {"name": "r8_r", "quantity": 1, "capabilities": ["dual_arm"]},
+    #         ],
+    #         "module": [
+    #             {"name": "arm_m", "quantity": 3, "capabilities": ["arm"]},
+    #         ]
+    #     },
+    #     "tasks": [
+    #         {"name": "wiping", "duration": 5, "required_capabilities": ["arm"], "location": "kitchen"},
+    #         {"name": "cleaning", "duration": 5, "required_capabilities": ["dual_arm"], "location": "entrance", "predecessors": ["wiping"]}
+    #     ]
+    # }
 
     # --- 1. データ準備 ---
     task_id_to_name, mode_to_name = create_name_mappings(input_data)
