@@ -675,6 +675,16 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
     fig.text(0.83, y_pos - 0.02, "Resources", fontsize=title_fontsize, fontweight='bold')
     y_pos -= 0.05
 
+    # Helper to generate capability list from either dict or list format
+    def get_caps_to_draw(capabilities):
+        caps = []
+        if isinstance(capabilities, dict):
+            for cap, count in sorted(capabilities.items()):
+                caps.extend([cap] * count)
+        elif isinstance(capabilities, list):
+            caps = capabilities # Old format
+        return caps
+
     # 1. Robots (Renewable) のセクション
     fig.text(0.83, y_pos, "Robots", fontsize=label_fontsize, fontweight='bold', style='italic', color='dimgray')
     y_pos -= 0.035
@@ -690,7 +700,8 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
         fig.text(0.85, y_pos - 0.015, f"(Qty. {capacity})", fontsize=label_fontsize - 2, color='dimgray', va='center')
 
         x_pos_cap = 0.92
-        for cap in res["capabilities"]:
+        caps_to_draw = get_caps_to_draw(res.get("capabilities", []))
+        for cap in caps_to_draw:
             cap_color = capability_color_map.get(cap, "grey")
             ellipse = patches.Ellipse((x_pos_cap, y_pos), width=0.01, height=0.01,
                                     facecolor=cap_color, edgecolor="black", linewidth=0.5,
@@ -717,7 +728,8 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
         fig.text(0.85, y_pos - 0.015, f"(Qty. {capacity})", fontsize=label_fontsize - 2, color='dimgray', va='center')
 
         x_pos_cap = 0.92
-        for cap in res["capabilities"]:
+        caps_to_draw = get_caps_to_draw(res.get("capabilities", []))
+        for cap in caps_to_draw:
             cap_color = capability_color_map.get(cap, "grey")
             ellipse = patches.Ellipse((x_pos_cap, y_pos), width=0.01, height=0.01,
                                     facecolor=cap_color, edgecolor="black", linewidth=0.5,
@@ -1082,7 +1094,7 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
     for res in all_resources:
         all_capabilities.update(res["capabilities"])
 
-    line_count = sum(2.5 + sum(len(combo) + 0.5 for combo in calculated_combinations[task['name']]) + 1.5
+    line_count = sum(2.5 + sum(len(combo) + 1 + 0.5 for combo in calculated_combinations[task['name']]) + 1.5
                      for task in input_data["tasks"])
 
     fig, ax = plt.subplots(figsize=(14, line_count * 0.4))
@@ -1663,13 +1675,13 @@ def main(_):
         ],
         "resources": {
             "robot": [
-                {"name": "r8_r", "quantity": 1, "capabilities": ["arm", "camera", "gripper", "serve"]},
+                {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2, "camera": 1, "gripper": 1, "serve": 1}},
             ],
             "module": [
-                {"name": "arm_m", "quantity": 4, "capabilities": ["arm", "camera", "cleaner"]},
-                {"name": "camera_m", "quantity": 3, "capabilities": ["camera"]},
-                {"name": "gripper_m", "quantity": 2, "capabilities": ["gripper"]},
-                {"name": "cleaner_m", "quantity": 2, "capabilities": ["cleaner"]}
+                {"name": "arm_m", "quantity": 4, "capabilities": {"arm": 1, "camera": 1, "cleaner": 1}},
+                {"name": "camera_m", "quantity": 3, "capabilities": {"camera": 1}},
+                {"name": "gripper_m", "quantity": 2, "capabilities": {"gripper": 1}},
+                {"name": "cleaner_m", "quantity": 2, "capabilities": {"cleaner": 1}}
             ]
         },
         # predecessors: 先行タスク
@@ -1678,7 +1690,7 @@ def main(_):
             {"name": "cooking", "duration": 30, "required_capabilities": {"arm": 2, "camera": 1, "gripper": 1}, "location": "kitchen"},
             {"name": "accounting", "duration": 10, "required_capabilities": {"camera": 1}, "location": "casher"},
             {"name": "wiping", "duration": 5, "required_capabilities": {"arm": 1, "cleaner": 1}, "location": "hall"},
-            {"name": "washing", "duration": 20, "required_capabilities": {"arm": 1, "camera": 1}, "location": "kitchen"},
+            # {"name": "washing", "duration": 20, "required_capabilities": {"arm": 1, "camera": 1}, "location": "kitchen"},
             {"name": "serving", "duration": 10, "required_capabilities": {"serve": 1}, "location": "hall", "predecessors": ["wiping", "cooking"]},
             {"name": "cleaning", "duration": 5, "required_capabilities": {"gripper": 1, "cleaner": 1}, "location": "entrance"}
         ]
