@@ -26,6 +26,7 @@ import io
 import tempfile
 import json
 from itertools import combinations
+from collections import Counter
 
 from absl import app
 from absl import flags
@@ -818,10 +819,14 @@ def _plot_gantt_chart(
         # 1. 要求Capabilityの楕円を左側に描画 (Placement/Retrievalでは省略)
         if not (task_name_full.startswith("Placement-") or task_name_full.startswith("Retrieval-")):
             if base_task_name in task_name_to_required_caps:
-                required_caps = sorted(task_name_to_required_caps[base_task_name])
-                num_caps = len(required_caps)
+                required_caps_dict = task_name_to_required_caps[base_task_name]
+                # 辞書から capability-count のペアをリストに展開
+                caps_to_draw = []
+                for cap, count in sorted(required_caps_dict.items()):
+                    caps_to_draw.extend([cap] * count)
+                num_caps = len(caps_to_draw)
                 start_y = i - (num_caps - 1) * 0.15
-                for j, cap in enumerate(required_caps):
+                for j, cap in enumerate(caps_to_draw):
                     color = capability_color_map.get(cap, "grey")
                     center_y = start_y + j * 0.3
                     ellipse = patches.Ellipse(
@@ -975,72 +980,107 @@ def visualize_schedule_only(
 
 def calculate_all_task_combinations(input_data):
     """
-    input_dataを受け取り、各タスクの要求を満たす「既約」な
-    リソースの組み合わせを全パターン計算して返します。
-    いずれかのタスクで有効な組み合わせが見つからない場合はNoneを返します。
+    input_dataを受け取り、各タスクの要求（機能ごとの必要個数）を満たす
+    「既約」なリソースの組み合わせを全パターン計算して返します。
+    いずれかのタスクで有効な組み合わせが見つからない場合はValueErrorを発生させます。
     """
-    def _find_irreducible_covers(required_caps, available_resources):
-        if not required_caps: return [[]]
+    def _find_irreducible_covers(required_caps_counter, available_resources):
+        """
+        required_caps_counter: Counter({"arm": 2, "camera": 1}) のような要求
+        available_resources: 利用可能なリソースのリスト
+        """
+        if not required_caps_counter:
+            return [[]]
+
         all_valid_covers = []
+        # 1から利用可能なリソース数までの全ての組み合わせを試す
         for i in range(1, len(available_resources) + 1):
             for combo in combinations(available_resources, i):
-                combined_caps = set(c for res in combo for c in res["capabilities"])
-                if required_caps.issubset(combined_caps):
+                # 組み合わせが提供する機能の合計をCounterで計算
+                provided_caps_counter = Counter()
+                for res in combo:
+                    provided_caps_counter.update(res["capabilities"])
+
+                # 要求される全ての機能が必要な数だけ満たされているかチェック
+                # (required - provided)の結果が空（全ての要素が0以下）なら条件を満たす
+                if not (required_caps_counter - provided_caps_counter):
                     all_valid_covers.append(list(combo))
 
+        # 既約な解（それ以上リソースを減らせない組み合わせ）のみを抽出
         irreducible_solutions = []
         for combo in all_valid_covers:
             is_irreducible = True
             if len(combo) > 1:
+                # 組み合わせから1つリソースを取り除いたサブセットを全通り試す
                 for sub_combo in combinations(combo, len(combo) - 1):
-                    sub_caps = set(c for res in sub_combo for c in res["capabilities"])
-                    if required_caps.issubset(sub_caps):
+                    sub_provided_caps = Counter()
+                    for res in sub_combo:
+                        sub_provided_caps.update(res["capabilities"])
+
+                    # サブセットでも要求を満たせるなら、元のcomboは既約ではない
+                    if not (required_caps_counter - sub_provided_caps):
                         is_irreducible = False
                         break
+
             if is_irreducible:
+                # 重複を避けるため、リソース名をソートして追加
                 solution_names = sorted([res["name"] for res in combo])
                 if solution_names not in irreducible_solutions:
                     irreducible_solutions.append(solution_names)
+
         return irreducible_solutions
 
     all_resources = input_data["resources"]["robot"] + input_data["resources"]["module"]
     all_task_combinations = {}
 
     for task in input_data["tasks"]:
-        task_name, required_capabilities = task["name"], set(task["required_capabilities"])
+        task_name = task["name"]
+        # 要求ケイパビリティをCounterオブジェクトに変換
+        required_capabilities = Counter(task["required_capabilities"])
+
         combinations_for_task = _find_irreducible_covers(required_capabilities, all_resources)
 
-        # 組み合わせが見つからない場合は即座にエラーを出す。
+        # 組み合わせが見つからない場合はエラー
         if not combinations_for_task:
-            raise ValueError("[calculate_all_task_combinations] エラー: 一部のタスクでリソースの組み合わせが見つかりません")
+            raise ValueError(
+                f"[calculate_all_task_combinations] Error: No resource combination found for task '{task_name}' "
+                f"with requirements {dict(required_capabilities)}"
+            )
 
         all_task_combinations[task_name] = combinations_for_task
 
     return all_task_combinations
 
-def draw_capabilities(ax, capabilities, x_start, y_pos, cap_color_map, patch_size=0.6, patch_margin=0.1, aspect_correction=1.0):
+# <<< 変更点: 機能の個数を描画できるように変更 >>>
+def draw_capabilities(ax, capabilities_counter, x_start, y_pos, cap_color_map, patch_size=0.6, patch_margin=0.1, aspect_correction=1.0):
     """
-    グラフのアスペクト比による歪みを補正する`aspect_correction`引数を追加。
-    楕円の幅(width)をこの値で割ることで、表示上は正円に見えるように調整します。
+    与えられたCounterに基づき、機能のシンボルを必要な個数だけ描画します。
     """
-    sorted_caps = sorted(list(capabilities))
-    for i, cap in enumerate(sorted_caps):
+    # 描画するケイパビリティのリストを作成 (例: {"arm": 2} -> ["arm", "arm"])
+    caps_to_draw = []
+    for cap, count in sorted(capabilities_counter.items()):
+        caps_to_draw.extend([cap] * count)
+
+    for i, cap in enumerate(caps_to_draw):
         if cap in cap_color_map:
             center_x = x_start + i * (patch_size * 0.3 + patch_margin) + patch_size / 2
             ellipse = patches.Ellipse(
                 (center_x, y_pos),
-                width=patch_size / aspect_correction,  # 横方向の歪みを補正
+                width=patch_size / aspect_correction,
                 height=patch_size,
                 facecolor=cap_color_map[cap],
                 edgecolor='gray'
             )
             ax.add_patch(ellipse)
 
-
+# <<< 変更点: 新しいデータ形式に対応 >>>
 def visualize_task_combinations(input_data, calculated_combinations, cap_color_map, resource_color_map, title_fontsize=16, label_fontsize=12):
     all_resources = input_data["resources"]["robot"] + input_data["resources"]["module"]
-    all_capabilities = set(cap for res in all_resources for cap in res["capabilities"])
-    sorted_caps = sorted(list(all_capabilities))
+
+    # 全てのユニークなケイパビリティを取得
+    all_capabilities = set()
+    for res in all_resources:
+        all_capabilities.update(res["capabilities"])
 
     line_count = sum(2.5 + sum(len(combo) + 0.5 for combo in calculated_combinations[task['name']]) + 1.5
                      for task in input_data["tasks"])
@@ -1060,7 +1100,6 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
 
     y_pos = line_count - 1
     for task in input_data["tasks"]:
-        # タスク名と場所を併記
         task_display_name = f"TASK: {task['name']}"
         if 'location' in task:
             task_display_name += f"  @ {task['location']}"
@@ -1069,7 +1108,9 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
         y_pos -= 1.2
         ax.text(1.0, y_pos, "Required:", fontsize=label_fontsize, va='center')
 
-        draw_capabilities(ax, task['required_capabilities'], 2.0, y_pos, cap_color_map, aspect_correction=aspect_correction)
+        # Counterに変換して描画関数に渡す
+        required_caps_counter = Counter(task['required_capabilities'])
+        draw_capabilities(ax, required_caps_counter, 2.0, y_pos, cap_color_map, aspect_correction=aspect_correction)
 
         y_pos -= 1.5
         combinations_for_task = calculated_combinations[task['name']]
@@ -1077,10 +1118,12 @@ def visualize_task_combinations(input_data, calculated_combinations, cap_color_m
             ax.text(1.5, y_pos, f"Solution {i+1}", fontsize=label_fontsize, va='center', style='italic', color='navy')
             y_pos -= 1
             for resource_name in combo:
-                ax.text(2.0, y_pos, f"  {resource_name}", fontsize=label_fontsize - 1, va='center')
+                ax.text(2.0, y_pos, f"• {resource_name}", fontsize=label_fontsize - 1, va='center')
                 resource_data = next((r for r in all_resources if r["name"] == resource_name), None)
                 if resource_data:
-                    draw_capabilities(ax, resource_data['capabilities'], 3.8, y_pos, cap_color_map, aspect_correction=aspect_correction)
+                    # リソースが持つケイパビリティもCounterに変換して描画
+                    resource_caps_counter = Counter(resource_data['capabilities'])
+                    draw_capabilities(ax, resource_caps_counter, 3.8, y_pos, cap_color_map, aspect_correction=aspect_correction)
                 y_pos -= 1
             y_pos -= 0.5
         y_pos += 1
@@ -1474,7 +1517,9 @@ def create_color_maps(input_data: dict) -> (dict, dict):
         colors = [reservoir_cmap((i + 1) % 10) for i in range(len(reservoir_names))]
         for name, color in zip(reservoir_names, colors):
             resource_color_map[name] = color
-    all_caps_set = set(cap for task in input_data["tasks"] for cap in task["required_capabilities"])
+    all_caps_set = set()
+    for task in input_data["tasks"]:
+        all_caps_set.update(task["required_capabilities"].keys())
     for res_type in ["robot", "module"]:
         for res in input_data["resources"][res_type]:
             all_caps_set.update(res["capabilities"])
@@ -1630,12 +1675,12 @@ def main(_):
         # predecessors: 先行タスク
         # RCPSP/max形式ではsuccessors（後続タスク）を指定しているが、人間にとってはpredecessors指定が分かりやすいはず
         "tasks": [
-            {"name": "cooking", "duration": 30, "required_capabilities": ["arm", "camera", "gripper"], "location": "kitchen"},
-            {"name": "accounting", "duration": 10, "required_capabilities": ["camera"], "location": "casher"},
-            {"name": "wiping", "duration": 5, "required_capabilities": ["arm", "cleaner"], "location": "hall"},
-            {"name": "washing", "duration": 20, "required_capabilities": ["arm", "camera"], "location": "kitchen"},
-            {"name": "serving", "duration": 10, "required_capabilities": ["serve"], "location": "hall", "predecessors": ["wiping", "cooking"]},
-            {"name": "cleaning", "duration": 5, "required_capabilities": ["gripper", "cleaner"], "location": "entrance"}
+            {"name": "cooking", "duration": 30, "required_capabilities": {"arm": 2, "camera": 1, "gripper": 1}, "location": "kitchen"},
+            {"name": "accounting", "duration": 10, "required_capabilities": {"camera": 1}, "location": "casher"},
+            {"name": "wiping", "duration": 5, "required_capabilities": {"arm": 1, "cleaner": 1}, "location": "hall"},
+            {"name": "washing", "duration": 20, "required_capabilities": {"arm": 1, "camera": 1}, "location": "kitchen"},
+            {"name": "serving", "duration": 10, "required_capabilities": {"serve": 1}, "location": "hall", "predecessors": ["wiping", "cooking"]},
+            {"name": "cleaning", "duration": 5, "required_capabilities": {"gripper": 1, "cleaner": 1}, "location": "entrance"}
         ]
     }
 
