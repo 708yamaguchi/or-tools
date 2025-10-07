@@ -114,7 +114,7 @@ class RcpspScheduler:
         else:
             return {"status": status, "makespan": float('inf'), "modules": float('inf')}
 
-    def analyze_tradeoff(self, module_name: str = "arm_m"):
+    def analyze_tradeoff(self, module_name: str = "arm_m", show_results: bool = False):
         """
         Makespan（完了時間）と特定モジュールの必要数のトレードオフ関係を分析し、グラフ化します。
 
@@ -143,7 +143,7 @@ class RcpspScheduler:
         res_min_span = self.solve('MINIMIZE_MAKESPAN',
                                    makespan_limit=None, # 上限なしで真の最短時間を探す
                                    module_quantities={module_name: module_upper_limit},
-                                   show_results=False)
+                                   show_results=show_results)
         if res_min_span["status"] == h.cp_model.INFEASIBLE:
             print("  Error: Could not find a solution even with unlimited modules. Aborting analysis.")
             return
@@ -155,7 +155,7 @@ class RcpspScheduler:
         res_max_modules = self.solve('MINIMIZE_MODULES',
                                      makespan_limit=int(min_makespan),
                                      module_quantities={module_name: module_upper_limit},
-                                     show_results=False)
+                                     show_results=show_results)
         if res_max_modules["status"] == h.cp_model.INFEASIBLE:
             print(f"  Error: Could not find a solution for makespan {int(min_makespan)}. This should not happen. Aborting.")
             return
@@ -175,7 +175,7 @@ class RcpspScheduler:
             res = self.solve('MINIMIZE_MAKESPAN',
                                makespan_limit=upper_bound_makespan, # 計算済みのmakespanを上限として設定
                                module_quantities={module_name: num_modules},
-                               show_results=False)
+                               show_results=show_results)
 
             if res["status"] in (h.cp_model.OPTIMAL, h.cp_model.FEASIBLE):
                 makespan = int(res["makespan"])
@@ -330,7 +330,7 @@ def main(_):
              "modes": [
                  {"duration": 20, "required_capabilities": {"arm": 3}},
                  {"duration": 30, "required_capabilities": {"arm": 2}},
-                 {"duration": 45, "required_capabilities": {"arm": 1,}},
+                 {"duration": 45, "required_capabilities": {"arm": 1}},
              ]},
             {"name": "clean YYY", "location": "610",
              "modes": [
@@ -339,7 +339,7 @@ def main(_):
             {"name": "clean ZZZ", "location": "610",
              "modes": [
                  {"duration": 10, "required_capabilities": {"arm": 2}},
-                 {"duration": 25, "required_capabilities": {"arm": 1,}},
+                 {"duration": 25, "required_capabilities": {"arm": 1}},
              ]},
             {"name": "clean AAA", "location": "610",
              "modes": [
@@ -370,7 +370,6 @@ def main(_):
              "modes": [
                  {"duration": 30, "required_capabilities": {"arm": 1}},
              ]},
-
         ]
     }
 
@@ -388,7 +387,7 @@ def main(_):
     elif mode == "SINGLE_RUN_MODULES":
         scheduler.solve(optimization_mode='MINIMIZE_MODULES', makespan_limit=input_data["makespan_limit"], show_results=True)
     elif mode == "TRADEOFF_ANALYSIS":
-        scheduler.analyze_tradeoff(module_name="arm_m")
+        scheduler.analyze_tradeoff(module_name="arm_m", show_results=False)
 
 
 if __name__ == "__main__":
