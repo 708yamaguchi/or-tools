@@ -1490,8 +1490,8 @@ def solve_rcpsp(
     module_capacity_vars = {}
     reservoir_resources = [res for res in all_resources if not problem.resources[res].renewable]
 
-    # モードに寄らず、makespanのリミットを定義
-    model.add(makespan <= makespan_limit)
+    if makespan_limit is not None:
+        model.add(makespan <= makespan_limit)
     # --- モジュール数最小化モード ---
     if optimization_mode == 'MINIMIZE_MODULES':
         # Renewableリソース(ロボット, 場所)の制約
@@ -1558,7 +1558,7 @@ def solve_rcpsp(
     solver = cp_model.CpSolver()
     if params:
         text_format.Parse(params, solver.parameters)
-    solver.parameters.log_search_progress = True
+    solver.parameters.log_search_progress = verbose
     status = solver.solve(model)
     results = { "solver": solver, "problem": problem, "all_active_tasks": all_active_tasks,
         "all_resources": all_resources, "source": source, "sink": sink,
