@@ -1008,99 +1008,98 @@ def visualize_schedule_only(
 
 def resolve_task_modes(input_data: dict) -> dict:
     """
-    入力データ内の各タスクについて、実行モードを解決します。
-    - 'modes'キーが存在する場合：
-        ユーザー定義の各モードについて、その'required_capabilities'を満たす
-        リソースの組み合わせをそれぞれ計算し、全ての組み合わせをフラットな
-        モードリストとして生成します。
-        組み合わせが見つからないモードは警告を出力して無視します。
-    - 'required_capabilities'キーが存在する場合（従来形式）：
-        機能要件を満たすリソースの組み合わせを自動計算し、モードとして生成します。
+    リソースプール全体（ロボット・モジュール）から、要求機能を満たす「既約」な組み合わせをすべて列挙する。
     """
 
-    def _find_irreducible_covers(required_caps_counter, available_resources):
+    def _find_all_irreducible_combinations(required_caps_counter, available_resources):
         """
-        機能要件(required_caps_counter)を満たす、既約なリソースの組み合わせを見つけます。
+        要求機能を満たす「既約」な組み合わせをすべて探索して返す。
+        既約な組み合わせとは、そのセットからどの要素を1つ取り除いても要求を
+        満たせなくなるような、無駄のない組み合わせのこと。
         """
         if not required_caps_counter:
             return [[]]
 
-        all_valid_covers = []
+        # STEP 1: 要求機能を満たす有効な組み合わせをすべて見つける
+        valid_covers = []
         for i in range(1, len(available_resources) + 1):
             for combo in combinations(available_resources, i):
                 provided_caps_counter = Counter()
                 for res in combo:
-                    provided_caps_counter.update(res["capabilities"])
-                if not (required_caps_counter - provided_caps_counter):
-                    all_valid_covers.append(list(combo))
+                    provided_caps_counter.update(res.get("capabilities", {}))
 
-        irreducible_solutions = []
-        for combo in all_valid_covers:
+                if not (required_caps_counter - provided_caps_counter):
+                    valid_covers.append(list(combo))
+
+        # STEP 2: 有効な組み合わせの中から「既約」なものだけを抽出する
+        irreducible_covers = []
+        for cover in valid_covers:
             is_irreducible = True
-            if len(combo) > 1:
-                for sub_combo in combinations(combo, len(combo) - 1):
-                    sub_provided_caps = Counter()
+            if len(cover) > 1:
+                # この組み合わせから要素を1つ減らした部分集合を作る
+                for sub_combo in combinations(cover, len(cover) - 1):
+                    # 部分集合が有効かどうかをチェック
+                    provided_caps_counter = Counter()
                     for res in sub_combo:
-                        sub_provided_caps.update(res["capabilities"])
-                    if not (required_caps_counter - sub_provided_caps):
+                        provided_caps_counter.update(res.get("capabilities", {}))
+
+                    # もし小さい部分集合でも要求を満たせるなら、元のcoverは「既約」ではない
+                    if not (required_caps_counter - provided_caps_counter):
                         is_irreducible = False
                         break
-            if is_irreducible:
-                solution_names = sorted([res["name"] for res in combo])
-                if solution_names not in irreducible_solutions:
-                    irreducible_solutions.append(solution_names)
 
-        return irreducible_solutions
+            if is_irreducible:
+                irreducible_covers.append(cover)
+
+        # STEP 3: 結果をリソース名のリストに変換し、重複を排除して返す
+        solutions = []
+        for c in irreducible_covers:
+            # 同じ種類のモジュールやロボットは区別しない
+            solution_names = sorted([res["name"] for res in c])
+            if solution_names not in solutions:
+                solutions.append(solution_names)
+
+        return solutions
 
     resolved_modes = {}
-    all_resources = input_data["resources"]["robot"] + input_data["resources"]["module"]
 
+    # --- 1. 全リソースを単一の「リソースプール」に統合 ---
+    all_resource_instances = []
+    all_resource_types = input_data["resources"]["robot"] + input_data["resources"]["module"]
+    for res_type in all_resource_types:
+        for i in range(res_type.get('quantity', 1)):
+            all_resource_instances.append(res_type)
+
+    # --- 2. 各タスクのモードを解決 ---
     for task in input_data["tasks"]:
         task_name = task["name"]
-
-        # 最終的に生成されるフラットなモードリスト
         final_modes_for_task = []
 
-        # --- 変更点: "modes"キーの存在を必須とする ---
-        if "modes" in task:
-            if not task["modes"]:
-                raise ValueError(f"Task '{task_name}' has an empty 'modes' list.")
+        if "modes" not in task:
+            raise ValueError(f"Task '{task_name}' is missing the 'modes' key.")
 
-            for i, mode_def in enumerate(task["modes"]):
-                if "duration" not in mode_def or "required_capabilities" not in mode_def:
-                    raise ValueError(f"Invalid mode definition in task '{task_name}'. Each mode must have 'duration' and 'required_capabilities'.")
+        for mode_def in task["modes"]:
+            duration = mode_def["duration"]
+            required_caps = Counter(mode_def["required_capabilities"])
 
-                duration = mode_def["duration"]
-                required_caps = Counter(mode_def["required_capabilities"])
+            # --- 3. 全ての既約な組み合わせを探索 ---
+            all_combos = _find_all_irreducible_combinations(required_caps, all_resource_instances)
 
-                # このモードの要求機能を満たすリソースの組み合わせを計算
-                combinations_for_mode = _find_irreducible_covers(required_caps, all_resources)
+            # --- 4. 見つかった組み合わせをモードとして定義 ---
+            for combo in all_combos:
+                final_modes_for_task.append({
+                    "duration": duration,
+                    "resources": combo,
+                    "required_caps": required_caps
+                })
 
-                # 組み合わせが見つからなくてもエラーにせず、警告を出してこのモードをスキップする
-                if not combinations_for_mode:
-                    print(
-                        f"WARNING: Task '{task_name}', mode {i+1} is impossible with available resources. "
-                        f"Requirements: {dict(required_caps)}. This execution mode will be ignored."
-                    )
-                    continue  # 次のモードの処理に移る
-
-                # 見つかった各組み合わせを、対応するdurationを持つ最終モードとして追加
-                for combo in combinations_for_mode:
-                    final_modes_for_task.append({
-                        "duration": duration,
-                        "resources": combo,
-                        "required_caps": required_caps
-                    })
-        else:
-            # --- 変更点: 旧フォーマット("required_capabilities" at task level)を削除し、エラーを出す ---
-            raise ValueError(
-                f"Task '{task_name}' is missing the 'modes' key. "
-                f"Please define all execution modes within a 'modes' list. "
-                f"Example: 'modes': [{{'duration': 10, 'required_capabilities': {{'arm': 1}}}}]")
-
-        # 全てのモードを試した結果、有効な実行方式が一つもなかった場合にエラーを出す
         if not final_modes_for_task:
-            raise ValueError(f"Could not resolve any valid execution mode for task '{task_name}'. Check warnings above.")
+            # 実行可能なモードが一つも見つからなかった場合、明確なエラーメッセージと共に例外を発生させる
+            raise ValueError(
+                f"ERROR: Task '{task_name}' is impossible to execute with the available resources. "
+                f"No valid resource combination could be found for any of its defined modes. "
+                f"Please check resource capabilities and task requirements."
+            )
 
         resolved_modes[task_name] = final_modes_for_task
 
@@ -1730,8 +1729,8 @@ def setup_rcpsp_problem(input_data: dict, combinations: dict) -> (rcpsp_pb2.Rcps
 
 def main(_):
     # 最適化モードを選択。'MINIMIZE_MAKESPAN'で最小makespanを確認し、それを基準に'MINIMIZE_MODULES'を使うと良い。
-    OPTIMIZATION_MODE = 'MINIMIZE_MAKESPAN' # プロジェクト完了時間（メイクスパン）を最小化
-    # OPTIMIZATION_MODE = 'MINIMIZE_MODULES'  # 指定した時間内で、使用するモジュール総数を最小化
+    # OPTIMIZATION_MODE = 'MINIMIZE_MAKESPAN' # プロジェクト完了時間（メイクスパン）を最小化
+    OPTIMIZATION_MODE = 'MINIMIZE_MODULES'  # 指定した時間内で、使用するモジュール総数を最小化
 
     # タスク定義
     # predecessors: 先行タスク
@@ -1802,120 +1801,121 @@ def main(_):
     #     ]
     # }
 
-    # # シリアルタスクの例
-    # input_data = {
-    #     "project_name": "Cooking",
-    #     "makespan_limit": 170,
-    #     "module_handling_time": 5,
-    #     "locations": [
-    #         {"name": "610", "max_robots": 99},
-    #     ],
-    #     "resources": {
-    #         "robot": [
-    #             {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2}},
-    #         ],
-    #         "module": [
-    #             {"name": "arm_m", "quantity": 10, "capabilities": {"arm": 1}},
-    #         ]
-    #     },
-    #     "tasks": [
-    #         {"name": "cooking XXX", "location": "610",
-    #          "modes": [
-    #              {"duration": 20, "required_capabilities": {"arm": 3}},
-    #              {"duration": 30, "required_capabilities": {"arm": 2}},
-    #              {"duration": 45, "required_capabilities": {"arm": 1,}},
-    #          ]},
-    #         {"name": "cooking YYY", "location": "610", "predecessors": ["cooking XXX"],
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 3}},
-    #          ]},
-    #         {"name": "cooking ZZZ", "location": "610", "predecessors": ["cooking YYY"],
-    #          "modes": [
-    #              {"duration": 10, "required_capabilities": {"arm": 2}},
-    #              {"duration": 25, "required_capabilities": {"arm": 1,}},
-    #          ]},
-    #         {"name": "cooking AAA", "location": "610", "predecessors": ["cooking ZZZ"],
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking BBB", "location": "610", "predecessors": ["cooking AAA"],
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking CCC", "location": "610", # "predecessors": ["cooking BBB"],
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking DDD", "location": "610", "predecessors": ["cooking CCC"],
-    #          "modes": [
-    #              {"duration": 10, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking EEE", "location": "610", "predecessors": ["cooking DDD"],
-    #          "modes": [
-    #              {"duration": 10, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking FFF", "location": "610", "predecessors": ["cooking EEE"],
-    #          "modes": [
-    #              {"duration": 10, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking GGG", "location": "610", "predecessors": ["cooking FFF"],
-    #          "modes": [
-    #              {"duration": 10, "required_capabilities": {"arm": 1}},
-    #          ]},
-
-    #     ]
-    # }
-
+    # シリアルタスクの例
     input_data = {
-        "project_name": "Restaurant",
-        "makespan_limit": 200,
-        "module_handling_time": 15,
+        "project_name": "Cooking",
+        "makespan_limit": 155,
+        "module_handling_time": 5,
         "locations": [
-            {"name": "kitchen", "max_robots": 2},
-            {"name": "entrance", "max_robots": 1},
-            {"name": "hall", "max_robots": 2},
-            {"name": "casher", "max_robots": 1}
+            {"name": "610", "max_robots": 99},
         ],
         "resources": {
             "robot": [
-                {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2, "camera": 1, "gripper": 1, "serve": 1}},
-                # {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 0, "serve": 1}},
+                {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2}},
+                # {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 0}},
             ],
             "module": [
-                {"name": "arm_m", "quantity": 4, "capabilities": {"arm": 1, "camera": 1, "cleaner": 1}},
-                {"name": "camera_m", "quantity": 3, "capabilities": {"camera": 1}},
-                {"name": "gripper_m", "quantity": 2, "capabilities": {"gripper": 1}},
-                {"name": "cleaner_m", "quantity": 2, "capabilities": {"cleaner": 1}}
+                {"name": "arm_m", "quantity": 10, "capabilities": {"arm": 1}},
             ]
         },
         "tasks": [
-            {"name": "cooking", "location": "kitchen",
+            {"name": "cooking XXX", "location": "610",
              "modes": [
-                 {"duration": 30, "required_capabilities": {"arm": 2, "camera": 1, "gripper": 1}},
-                 {"duration": 45, "required_capabilities": {"arm": 1,}},
+                 {"duration": 20, "required_capabilities": {"arm": 3}},
+                 {"duration": 30, "required_capabilities": {"arm": 2}},
+                 {"duration": 45, "required_capabilities": {"arm": 1}},
              ]},
-            {"name": "accounting", "location": "casher",
+            {"name": "cooking YYY", "location": "610", "predecessors": ["cooking XXX"],
              "modes": [
-                 {"duration": 10, "required_capabilities": {"camera": 1}}
+                 {"duration": 30, "required_capabilities": {"arm": 3}},
              ]},
-            {"name": "wiping", "location": "hall",
+            {"name": "cooking ZZZ", "location": "610", "predecessors": ["cooking YYY"],
              "modes": [
-                 {"duration": 5, "required_capabilities": {"arm": 1, "cleaner": 1}}
+                 {"duration": 10, "required_capabilities": {"arm": 2}},
+                 {"duration": 25, "required_capabilities": {"arm": 1,}},
              ]},
-            {"name": "washing", "location": "kitchen",
+            {"name": "cooking AAA", "location": "610", "predecessors": ["cooking ZZZ"],
              "modes": [
-                 {"duration": 20, "required_capabilities": {"arm": 1, "camera": 1}}
+                 {"duration": 30, "required_capabilities": {"arm": 1}},
              ]},
-            {"name": "serving", "location": "hall", "predecessors": ["wiping", "cooking"],
+            {"name": "cooking BBB", "location": "610", "predecessors": ["cooking AAA"],
              "modes": [
-                 {"duration": 10, "required_capabilities": {"serve": 1}}
+                 {"duration": 30, "required_capabilities": {"arm": 1}},
              ]},
-            {"name": "cleaning", "location": "entrance",
+            {"name": "cooking CCC", "location": "610", # "predecessors": ["cooking BBB"],
              "modes": [
-                 {"duration": 5, "required_capabilities": {"gripper": 1, "cleaner": 1}}
+                 {"duration": 30, "required_capabilities": {"arm": 1}},
              ]},
+            {"name": "cooking DDD", "location": "610", "predecessors": ["cooking CCC"],
+             "modes": [
+                 {"duration": 10, "required_capabilities": {"arm": 1}},
+             ]},
+            {"name": "cooking EEE", "location": "610", "predecessors": ["cooking DDD"],
+             "modes": [
+                 {"duration": 10, "required_capabilities": {"arm": 1}},
+             ]},
+            {"name": "cooking FFF", "location": "610", "predecessors": ["cooking EEE"],
+             "modes": [
+                 {"duration": 10, "required_capabilities": {"arm": 1}},
+             ]},
+            {"name": "cooking GGG", "location": "610", "predecessors": ["cooking FFF"],
+             "modes": [
+                 {"duration": 10, "required_capabilities": {"arm": 1}},
+             ]},
+
         ]
     }
+
+    # input_data = {
+    #     "project_name": "Restaurant",
+    #     "makespan_limit": 200,
+    #     "module_handling_time": 15,
+    #     "locations": [
+    #         {"name": "kitchen", "max_robots": 2},
+    #         {"name": "entrance", "max_robots": 1},
+    #         {"name": "hall", "max_robots": 2},
+    #         {"name": "casher", "max_robots": 1}
+    #     ],
+    #     "resources": {
+    #         "robot": [
+    #             {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2, "camera": 1, "gripper": 1, "serve": 1}},
+    #             # {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 0, "serve": 1}},
+    #         ],
+    #         "module": [
+    #             {"name": "arm_m", "quantity": 4, "capabilities": {"arm": 1, "camera": 1, "cleaner": 1}},
+    #             {"name": "camera_m", "quantity": 3, "capabilities": {"camera": 1}},
+    #             {"name": "gripper_m", "quantity": 2, "capabilities": {"gripper": 1}},
+    #             {"name": "cleaner_m", "quantity": 2, "capabilities": {"cleaner": 1}}
+    #         ]
+    #     },
+    #     "tasks": [
+    #         {"name": "cooking", "location": "kitchen",
+    #          "modes": [
+    #              {"duration": 30, "required_capabilities": {"arm": 2, "camera": 1, "gripper": 1}},
+    #              {"duration": 45, "required_capabilities": {"arm": 1,}},
+    #          ]},
+    #         {"name": "accounting", "location": "casher",
+    #          "modes": [
+    #              {"duration": 10, "required_capabilities": {"camera": 1}}
+    #          ]},
+    #         {"name": "wiping", "location": "hall",
+    #          "modes": [
+    #              {"duration": 5, "required_capabilities": {"arm": 1, "cleaner": 1}}
+    #          ]},
+    #         {"name": "washing", "location": "kitchen",
+    #          "modes": [
+    #              {"duration": 20, "required_capabilities": {"arm": 1, "camera": 1}}
+    #          ]},
+    #         {"name": "serving", "location": "hall", "predecessors": ["wiping", "cooking"],
+    #          "modes": [
+    #              {"duration": 10, "required_capabilities": {"serve": 1}}
+    #          ]},
+    #         {"name": "cleaning", "location": "entrance",
+    #          "modes": [
+    #              {"duration": 5, "required_capabilities": {"gripper": 1, "cleaner": 1}}
+    #          ]},
+    #     ]
+    # }
 
     # --- 1. データ準備 ---
     task_id_to_name, mode_to_name = create_name_mappings(input_data)
