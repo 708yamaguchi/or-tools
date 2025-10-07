@@ -42,7 +42,7 @@ class RcpspScheduler:
         スケジューラのインスタンスを初期化します。
         """
         self.base_input_data = input_data
-        
+
         # ヘルパー関数を呼び出して、IDと名前のマッピングや表示用のカラーマップを作成
         self.task_id_to_name, self.mode_to_name = h.create_name_mappings(self.base_input_data)
         self.renewable_id_to_name, self.reservoir_id_to_name = h.create_resource_name_mappings(self.base_input_data)
@@ -55,9 +55,9 @@ class RcpspScheduler:
         if show_results:
             print("\n" + "="*25 + f" Starting New Solve Run " + "="*25)
             print(f"Mode: {optimization_mode}, Makespan Limit: {makespan_limit}, Module Overrides: {module_quantities}")
-        
+
         current_input_data = copy.deepcopy(self.base_input_data)
-        
+
         if module_quantities:
             for module in current_input_data["resources"]["module"]:
                 if module["name"] in module_quantities:
@@ -73,7 +73,7 @@ class RcpspScheduler:
         last_task = len(problem.tasks) - 1
 
         status, results = h.solve_rcpsp(
-            problem=problem, 
+            problem=problem,
             active_tasks=set(range(1, last_task)),
             source=0, sink=last_task,
             num_actual_robots=num_actual_robots,
@@ -117,91 +117,88 @@ class RcpspScheduler:
     def analyze_tradeoff(self, module_name: str = "arm_m"):
         """
         Makespan（完了時間）と特定モジュールの必要数のトレードオフ関係を分析し、グラフ化します。
-        
+
         Args:
             module_name (str): 分析対象とするモジュールの名前。
         """
-        print("\n" + "="*15 + " 🚀 Starting Makespan vs. Module Trade-off Analysis " + "="*15)
+        print("\n" + "="*15 + "    Starting Makespan vs. Module Trade-off Analysis " + "="*15)
+
+        # Step 0: モジュール数上限を取得
+        module_upper_limit = len(self.base_input_data.get("tasks", []))
+        if module_upper_limit == 0:
+            print("  Error: No tasks found in the input data. Aborting analysis.")
+            return
 
         # Step 1: モジュール無制限時の理論上の最短時間を計算
-        print("\n[1/5] Calculating minimum possible makespan (with unlimited modules)...")
-        res_min_span = self.solve('MINIMIZE_MAKESPAN', 
-                                  makespan_limit=None, # 上限なしで真の最短時間を探す
-                                  module_quantities={module_name: 10},  # 十分多い数とする
-                                  show_results=False)
+        print("\n[1/4] Calculating minimum possible makespan (with unlimited modules)...")
+        res_min_span = self.solve('MINIMIZE_MAKESPAN',
+                                   makespan_limit=None, # 上限なしで真の最短時間を探す
+                                   module_quantities={module_name: module_upper_limit},
+                                   show_results=False)
         if res_min_span["status"] == h.cp_model.INFEASIBLE:
-            print("❌ Error: Could not find a solution even with unlimited modules. Aborting analysis.")
+            print("  Error: Could not find a solution even with unlimited modules. Aborting analysis.")
             return
         min_makespan = res_min_span["makespan"]
-        print(f"  ✅ Minimum makespan: {min_makespan}")
+        print(f"    Minimum makespan: {min_makespan}")
 
         # Step 2: Step1で得られた最短時間で実行するために必要なモジュール数を確認
-        print(f"\n[2/5] Calculating modules needed for the minimum makespan of {int(min_makespan)}...")
-        res_max_modules = self.solve('MINIMIZE_MODULES', makespan_limit=int(min_makespan), show_results=False)
+        print(f"\n[2/4] Calculating modules needed for the minimum makespan of {int(min_makespan)}...")
+        res_max_modules = self.solve('MINIMIZE_MODULES',
+                                     makespan_limit=int(min_makespan),
+                                     module_quantities={module_name: module_upper_limit},
+                                     show_results=False)
         if res_max_modules["status"] == h.cp_model.INFEASIBLE:
-            print(f"❌ Error: Could not find a solution for makespan {int(min_makespan)}. This should not happen. Aborting.")
+            print(f"  Error: Could not find a solution for makespan {int(min_makespan)}. This should not happen. Aborting.")
             return
         max_modules_needed = res_max_modules["modules"]
-        print(f"  ✅ Max modules needed for minimum makespan: {max_modules_needed}")
+        print(f"    Max modules needed for minimum makespan: {max_modules_needed}")
 
-        # Step 3: モジュール0台の時の最小makespanを計算し、以降の計算の上限とする
-        print("\n[3/5] Calculating makespan with zero modules to set an upper bound...")
-        res_zero_module = self.solve('MINIMIZE_MAKESPAN', 
-                                     makespan_limit=None, # 上限なしで探す
-                                     module_quantities={module_name: 0}, 
-                                     show_results=False)
-        
-        upper_bound_makespan = None
-        if res_zero_module["status"] in (h.cp_model.OPTIMAL, h.cp_model.FEASIBLE):
-            upper_bound_makespan = int(res_zero_module["makespan"])
-            print(f"  ✅ Makespan with zero modules: {upper_bound_makespan}. This will be the search limit.")
-        else:
-            print("  ⚠️ Warning: No solution found with zero modules. Proceeding without an upper bound.")
-
-        # Step 4: モジュール数0からStep2で得られたモジュール使用数まで、最短時間を計算する
-        print("\n[4/5] Calculating minimum makespan for each module count...")
+        # Step 3: モジュール数を0から順に増やし、makespanを計算 (旧Step3とStep4を統合)
+        # 前回のmakespanを次の上限として利用し、探索を効率化
+        print(f"\n[3/4] Calculating minimum makespan for each module count (from 0 to {max_modules_needed})...")
         raw_points = []  # (num_modules, makespan) のペアを格納
-        
-        # モジュール0の結果は既にあれば利用する
-        if upper_bound_makespan is not None:
-            raw_points.append((0, upper_bound_makespan))
-            print(f"  - Calculating for 0 module(s)... -> Reusing result: {upper_bound_makespan}")
+        upper_bound_makespan = None # 初回の探索では上限は設定しない
 
-        # 1から残りのモジュール数を計算
-        start_module_count = 1 if upper_bound_makespan is not None else 0
-        for num_modules in range(start_module_count, max_modules_needed + 1):
+        for num_modules in range(max_modules_needed + 1):
             print(f"  - Calculating for {num_modules} module(s)...", end='', flush=True)
-            res = self.solve('MINIMIZE_MAKESPAN', 
-                             makespan_limit=upper_bound_makespan, # ここで計算した上限を設定
-                             module_quantities={module_name: num_modules}, 
-                             show_results=False)
-            
+
+            res = self.solve('MINIMIZE_MAKESPAN',
+                               makespan_limit=upper_bound_makespan, # 計算済みのmakespanを上限として設定
+                               module_quantities={module_name: num_modules},
+                               show_results=False)
+
             if res["status"] in (h.cp_model.OPTIMAL, h.cp_model.FEASIBLE):
                 makespan = int(res["makespan"])
                 raw_points.append((num_modules, makespan))
-                print(f" -> Achieved makespan: {makespan}")
+
+                # 見つかったmakespanを次の探索の上限として更新する
+                upper_bound_makespan = makespan
+                print(f" -> Achieved makespan: {makespan}. Set as new upper bound.")
             else:
                 print(" -> No solution found.")
-        
+                # 解が見つからない場合でも、上限は維持したまま次のモジュール数へ進む
+
         if not raw_points:
-            print("\n❌ No feasible solutions found during the analysis. Cannot generate a plot.")
+            print("\n  No feasible solutions found during the analysis. Cannot generate a plot.")
             return
 
-        # Step 5: 描画データの準備とグラフ描画
-        print("\n[5/5] Preparing data and plotting the results...")
+        # Step 4: 描画データの準備とグラフ描画 (旧Step5)
+        print("\n[4/4] Preparing data and plotting the results...")
 
         makespan_to_min_module = {}
+        # makespanが小さい順、次にモジュール数が小さい順でソート
         sorted_raw_points = sorted(raw_points, key=lambda x: (x[1], x[0]))
-        
+
         for num_modules, makespan in sorted_raw_points:
+            # 同じmakespanを達成できる、より少ないモジュール数の結果を優先する
             if makespan not in makespan_to_min_module:
-                 makespan_to_min_module[makespan] = num_modules
-        
+                   makespan_to_min_module[makespan] = num_modules
+
         tradeoff_points = sorted(makespan_to_min_module.items())
-        
+
         self._plot_tradeoff_graph(
-            tradeoff_points, 
-            module_name, 
+            tradeoff_points,
+            module_name,
         )
 
     def _plot_tradeoff_graph(self, points: list, module_name: str):
@@ -218,7 +215,7 @@ class RcpspScheduler:
         points.sort()
         x_vals = [p[0] for p in points]
         y_vals = [p[1] for p in points]
-        
+
         plt.figure(figsize=(12, 7))
         plt.step(x_vals, y_vals, where='post', marker='o', linestyle='-')
 
