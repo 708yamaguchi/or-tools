@@ -124,10 +124,19 @@ class RcpspScheduler:
         print("\n" + "="*15 + "    Starting Makespan vs. Module Trade-off Analysis " + "="*15)
 
         # Step 0: モジュール数上限を取得
-        module_upper_limit = len(self.base_input_data.get("tasks", []))
-        if module_upper_limit == 0:
-            print("  Error: No tasks found in the input data. Aborting analysis.")
+        module_upper_limit = None
+        # 'resources'や'module'キーが存在しない場合も考慮し、安全にリストを取得
+        modules_list = self.base_input_data.get("resources", {}).get("module", [])
+        # モジュールリストをループして、指定された名前のモジュールを探す
+        for module in modules_list:
+            if module.get("name") == module_name:
+                module_upper_limit = module.get("quantity")
+                break  # 対象モジュールが見つかったのでループを終了
+        # 対象モジュールが入力データに見つからなかった場合はエラーとして処理を中断
+        if module_upper_limit is None:
+            print(f"  Error: Module '{module_name}' not found in the input data's resources. Aborting analysis.")
             return
+        print(f"  Initial quantity for module '{module_name}' is {module_upper_limit}.")
 
         # Step 1: モジュール無制限時の理論上の最短時間を計算
         print("\n[1/4] Calculating minimum possible makespan (with unlimited modules)...")
@@ -151,6 +160,7 @@ class RcpspScheduler:
             print(f"  Error: Could not find a solution for makespan {int(min_makespan)}. This should not happen. Aborting.")
             return
         max_modules_needed = res_max_modules["modules"]
+        max_modules_needed = min(max_modules_needed, module_upper_limit)
         print(f"    Max modules needed for minimum makespan: {max_modules_needed}")
 
         # Step 3: モジュール数を0から順に増やし、makespanを計算 (旧Step3とStep4を統合)
@@ -339,14 +349,15 @@ def main(_):
              "modes": [
                  {"duration": 30, "required_capabilities": {"arm": 1}},
              ]},
-            {"name": "clean CCC", "location": "610",
-             "modes": [
-                 {"duration": 30, "required_capabilities": {"arm": 1}},
-             ]},
-            {"name": "clean DDD", "location": "610",
-             "modes": [
-                 {"duration": 30, "required_capabilities": {"arm": 1}},
-             ]},
+            # これらのタスクを入れると計算時間が爆発する
+            # {"name": "clean CCC", "location": "610",
+            #  "modes": [
+            #      {"duration": 30, "required_capabilities": {"arm": 1}},
+            #  ]},
+            # {"name": "clean DDD", "location": "610",
+            #  "modes": [
+            #      {"duration": 30, "required_capabilities": {"arm": 1}},
+            #  ]},
             {"name": "clean EEE", "location": "610",
              "modes": [
                  {"duration": 30, "required_capabilities": {"arm": 1}},
@@ -362,7 +373,6 @@ def main(_):
 
         ]
     }
-
 
     # --- 2. Initialize Scheduler ---
     scheduler = RcpspScheduler(input_data)
