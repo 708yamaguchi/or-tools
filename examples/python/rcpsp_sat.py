@@ -385,7 +385,8 @@ def main(_):
     if mode == "SINGLE_RUN_MAKESPAN":
         scheduler.solve(optimization_mode='MINIMIZE_MAKESPAN', show_results=True)
     elif mode == "SINGLE_RUN_MODULES":
-        scheduler.solve(optimization_mode='MINIMIZE_MODULES', makespan_limit=input_data["makespan_limit"], show_results=True)
+        scheduler.solve(optimization_mode='MINIMIZE_MODULES', show_results=True,
+                        makespan_limit=input_data.get("makespan_limit"))
     elif mode == "TRADEOFF_ANALYSIS":
         scheduler.analyze_tradeoff(module_name="arm_m", show_results=False)
 
