@@ -1804,7 +1804,7 @@ def main(_):
     # シリアルタスクの例
     input_data = {
         "project_name": "Cooking",
-        "makespan_limit": 155,
+        "makespan_limit": 150,
         "module_handling_time": 5,
         "locations": [
             {"name": "610", "max_robots": 99},
@@ -1827,7 +1827,7 @@ def main(_):
              ]},
             {"name": "cooking YYY", "location": "610", "predecessors": ["cooking XXX"],
              "modes": [
-                 {"duration": 30, "required_capabilities": {"arm": 3}},
+                 {"duration": 30, "required_capabilities": {"arm": 2}},
              ]},
             {"name": "cooking ZZZ", "location": "610", "predecessors": ["cooking YYY"],
              "modes": [
