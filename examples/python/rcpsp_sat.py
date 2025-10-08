@@ -192,49 +192,47 @@ class RcpspScheduler:
         # Step 4: 描画データの準備とグラフ描画
         print("\n[4/4] Preparing data and plotting the results...")
 
-        makespan_to_min_module = {}
-        # makespanが小さい順、次にモジュール数が小さい順でソート
-        sorted_raw_points = sorted(raw_points, key=lambda x: (x[1], x[0]))
-
-        for num_modules, makespan in sorted_raw_points:
-            # 同じmakespanを達成できる、より少ないモジュール数の結果を優先する
-            if makespan not in makespan_to_min_module:
-                   makespan_to_min_module[makespan] = num_modules
-
-        tradeoff_points = sorted(makespan_to_min_module.items())
-
-        self._plot_tradeoff_graph(
-            tradeoff_points,
-            module_name,
-        )
+        # モジュール数が小さい順、次にmakespanが小さい順でソート
+        sorted_raw_points = sorted(raw_points, key=lambda x: (x[0], x[1]))
+        points_for_plot = [(makespan, num_modules) for num_modules, makespan in sorted_raw_points]
+        self._plot_tradeoff_graph(points_for_plot, module_name)
 
     def _plot_tradeoff_graph(self, points: list, module_name: str):
-        """分析結果をグラフにプロットします。"""
+        """
+        最適なトレードオフ曲線（ステップ）と全てのデータ点（散布図）を重ねてプロットします。
+        """
         if not points:
-            print("\nNo data points to plot for the trade-off curve.")
+            print("\nNo data points to plot.")
             return
 
-        print("\n--- Trade-off Analysis Results ---")
-        print("Makespan -> Min Modules")
-        for p in reversed(points):
-            print(f"  {p[0]:<8} -> {p[1]}")
+        # 全てのデータポイントを準備 (散布図用)
+        all_x = [p[0] for p in points]
+        all_y = [p[1] for p in points]
+        # 最適な点のみをフィルタリング (ステッププロット用)
+        unique_points = {}
+        for x, y in points:
+            if x not in unique_points or y < unique_points[x]:
+                unique_points[x] = y
 
-        points.sort()
-        x_vals = [p[0] for p in points]
-        y_vals = [p[1] for p in points]
+        filtered_points = sorted(list(unique_points.items()))
+        filtered_x = [p[0] for p in filtered_points]
+        filtered_y = [p[1] for p in filtered_points]
 
+        # グラフの描画
         plt.figure(figsize=(12, 7))
-        plt.step(x_vals, y_vals, where='post', marker='o', linestyle='-')
-
+        # ステッププロットで「最適なトレードオフ曲線」を描画
+        plt.step(filtered_x, filtered_y, where='post', linestyle='-', label='Optimal Trade-off')
+        # 散布図で「全てのデータ点」を描画。zorder=3 で線より手前に点を表示, s=50でマーカーサイズを調整
+        plt.scatter(all_x, all_y, marker='o', zorder=3, s=50, label='All Data Points')
         plt.title(f'Trade-off: Makespan vs. Required "{module_name}" Modules', fontsize=16)
         plt.xlabel('Allowed Project Makespan (Time)', fontsize=12)
         plt.ylabel(f'Minimum Required "{module_name}" Modules', fontsize=12)
         plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.grid(axis='x', linestyle=':', alpha=0.5)
         plt.gca().yaxis.set_major_locator(MaxNLocator(integer=True))
+        plt.legend()
         plt.tight_layout()
         plt.show()
-
 
 # =============================================================================
 # Main Execution Block
@@ -419,7 +417,7 @@ def main(_):
 
     input_data = {
         "project_name": "Parallel task example",
-        "makespan_limit": 290,
+        "makespan_limit": 80,
         "module_handling_time": 5,
         "locations": [
             {"name": "610", "max_robots": 99},
@@ -437,8 +435,8 @@ def main(_):
             {"name": "clean 1", "location": "610",
              "modes": [
                  {"duration": 20, "required_capabilities": {"arm": 3}},
-                 {"duration": 30, "required_capabilities": {"arm": 2}},
-                 {"duration": 45, "required_capabilities": {"arm": 1}},
+                 # {"duration": 30, "required_capabilities": {"arm": 2}},
+                 # {"duration": 45, "required_capabilities": {"arm": 1}},
              ]},
             {"name": "clean 2", "location": "610",
              "modes": [
@@ -446,7 +444,7 @@ def main(_):
              ]},
             {"name": "clean 3", "location": "610",
              "modes": [
-                 {"duration": 10, "required_capabilities": {"arm": 2}},
+                 # {"duration": 10, "required_capabilities": {"arm": 2}},
                  {"duration": 25, "required_capabilities": {"arm": 1}},
              ]},
             {"name": "clean 4", "location": "610",
