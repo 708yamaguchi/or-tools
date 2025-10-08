@@ -370,47 +370,94 @@ def main(_):
     #     ]
     # }
 
+    # input_data = {
+    #     "project_name": "Serial task example",
+    #     "makespan_limit": 300,
+    #     "module_handling_time": 5,
+    #     "locations": [
+    #         {"name": "610", "max_robots": 99},
+    #     ],
+    #     "resources": {
+    #         "robot": [
+    #             # {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2}},
+    #             {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 0}},
+    #         ],
+    #         "module": [
+    #             {"name": "arm_m", "quantity": 10, "capabilities": {"arm": 1}},
+    #         ]
+    #     },
+    #     "tasks": [
+    #         {"name": "cooking 1", "location": "610",
+    #          "modes": [
+    #              {"duration": 20, "required_capabilities": {"arm": 3}},
+    #              {"duration": 30, "required_capabilities": {"arm": 2}},
+    #              {"duration": 45, "required_capabilities": {"arm": 1}},
+    #          ]},
+    #         {"name": "cooking 2", "location": "610", "predecessors": ["cooking 1"],
+    #          "modes": [
+    #              {"duration": 30, "required_capabilities": {"arm": 2}},
+    #          ]},
+    #         {"name": "cooking 3", "location": "610", "predecessors": ["cooking 2"],
+    #          "modes": [
+    #              {"duration": 10, "required_capabilities": {"arm": 2}},
+    #              {"duration": 25, "required_capabilities": {"arm": 1,}},
+    #          ]},
+    #         {"name": "cooking 4", "location": "610", "predecessors": ["cooking 3"],
+    #          "modes": [
+    #              {"duration": 30, "required_capabilities": {"arm": 1}},
+    #          ]},
+    #         {"name": "cooking 5", "location": "610", "predecessors": ["cooking 4"],
+    #          "modes": [
+    #              {"duration": 30, "required_capabilities": {"arm": 1}},
+    #          ]},
+    #         {"name": "cooking 6", "location": "610", "predecessors": ["cooking 5"],
+    #          "modes": [
+    #              {"duration": 30, "required_capabilities": {"arm": 1}},
+    #          ]},
+    #     ]
+    # }
+
     input_data = {
-        "project_name": "Serial task example",
-        "makespan_limit": 200,
+        "project_name": "Parallel task example",
+        "makespan_limit": 290,
         "module_handling_time": 5,
         "locations": [
             {"name": "610", "max_robots": 99},
         ],
         "resources": {
             "robot": [
-                # {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2}},
-                {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 0}},
+                {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2}},
+                # {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 0}},
             ],
             "module": [
                 {"name": "arm_m", "quantity": 10, "capabilities": {"arm": 1}},
             ]
         },
         "tasks": [
-            {"name": "cooking 1", "location": "610",
+            {"name": "clean 1", "location": "610",
              "modes": [
                  {"duration": 20, "required_capabilities": {"arm": 3}},
                  {"duration": 30, "required_capabilities": {"arm": 2}},
                  {"duration": 45, "required_capabilities": {"arm": 1}},
              ]},
-            {"name": "cooking 2", "location": "610", "predecessors": ["cooking 1"],
+            {"name": "clean 2", "location": "610",
              "modes": [
                  {"duration": 30, "required_capabilities": {"arm": 2}},
              ]},
-            {"name": "cooking 3", "location": "610", "predecessors": ["cooking 2"],
+            {"name": "clean 3", "location": "610",
              "modes": [
                  {"duration": 10, "required_capabilities": {"arm": 2}},
-                 {"duration": 25, "required_capabilities": {"arm": 1,}},
+                 {"duration": 25, "required_capabilities": {"arm": 1}},
              ]},
-            {"name": "cooking 4", "location": "610", "predecessors": ["cooking 3"],
+            {"name": "clean 4", "location": "610",
              "modes": [
                  {"duration": 30, "required_capabilities": {"arm": 1}},
              ]},
-            {"name": "cooking 5", "location": "610", "predecessors": ["cooking 4"],
+            {"name": "clean 5", "location": "610",
              "modes": [
                  {"duration": 30, "required_capabilities": {"arm": 1}},
              ]},
-            {"name": "cooking 6", "location": "610", "predecessors": ["cooking 5"],
+            {"name": "clean 6", "location": "610",
              "modes": [
                  {"duration": 30, "required_capabilities": {"arm": 1}},
              ]},
