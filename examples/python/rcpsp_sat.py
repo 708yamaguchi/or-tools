@@ -161,6 +161,12 @@ class RcpspScheduler:
         max_modules_needed = res_max_modules["modules"]
         max_modules_needed = min(max_modules_needed, module_upper_limit)
         print(f"    Max modules needed for minimum makespan: {max_modules_needed}")
+        # Step1で設定したモジュール数の上限に達した場合に警告を出力
+        if max_modules_needed == module_upper_limit:
+            print("\n  ⚠️ WARNING: The number of modules required to achieve the minimum makespan "
+                  f"is equal to the initial upper limit ({module_upper_limit}).")
+            print("              This may indicate that the 'quantity' for this module is a bottleneck. "
+                  "A shorter makespan might be achievable if more modules were available.")
 
         # Step 3: モジュール数を0から順に増やし、makespanを計算 (旧Step3とStep4を統合)
         # 前回のmakespanを次の上限として利用し、探索を効率化
