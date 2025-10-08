@@ -1,14 +1,9 @@
 # rcpsp_helpers.py
 
 import collections
-import io
 import tempfile
-import json
 from itertools import combinations
 from collections import Counter
-
-from absl import app
-from absl import flags
 
 from google.protobuf import text_format
 from ortools.sat.python import cp_model
@@ -20,8 +15,6 @@ import matplotlib.patches as patches
 from matplotlib.ticker import MaxNLocator
 import matplotlib.cm as cm
 import numpy as np
-
-_HORIZON = flags.DEFINE_integer("horizon", -1, "Force horizon.")
 
 # --- Helper Functions for Task ID Calculation ---
 # int -> Tuple[int, int, int]
@@ -288,7 +281,7 @@ def generate_rcpsp_max_from_json(input_data, resolved_task_modes, debug_print=Fa
         activities[retrieval_id] = {'modes': num_placement_retrieval_modes, 'successors': sorted(retrieval_successors), 'demands': demands_retrieval, 'costs_by_mode': retrieval_costs_by_mode}
 
         if debug_print:
-            print(f"\n" + "="*15 + f" DEBUG: Task {n} ({task_name}) " + "="*15)
+            print("\n" + "="*15 + f" DEBUG: Task {n} ({task_name}) " + "="*15)
             print(f"  Location: {task_location}")
             print(f"  Activity IDs: Placement={placement_id}, Work={work_id}, Retrieval={retrieval_id}")
             print(f"  Successors: P:{activities[placement_id]['successors']} -> W:{activities[work_id]['successors']} -> R:{activities[retrieval_id]['successors']}")
@@ -1405,8 +1398,6 @@ def solve_rcpsp(
     else:  # 'MINIMIZE_MAKESPAN' モードの場合
         if problem.deadline != -1:
             horizon = problem.deadline
-        elif _HORIZON.value > 0:
-            horizon = _HORIZON.value
         else:  # Naive computation.
             horizon = sum(max(r.duration for r in t.recipes) for t in problem.tasks)
             if problem.is_rcpsp_max:

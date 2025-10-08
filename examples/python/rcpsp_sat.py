@@ -21,14 +21,13 @@ Data use in flags:
   http://www.om-db.wi.tum.de/psplib/data.html
 """
 
-# main_scheduler.py
+import argparse
+import json
 
 import copy
-from ortools.sat.python import cp_model
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
-# ヘルパーファイルを "h" という短い名前でインポート
 import rcpsp_helpers as h
 
 
@@ -53,7 +52,7 @@ class RcpspScheduler:
         単一のスケジューリング問題を解きます。
         """
         if show_results:
-            print("\n" + "="*25 + f" Starting New Solve Run " + "="*25)
+            print("\n" + "="*25 + " Starting New Solve Run " + "="*25)
             print(f"Mode: {optimization_mode}, Makespan Limit: {makespan_limit}, Module Overrides: {module_quantities}")
 
         current_input_data = copy.deepcopy(self.base_input_data)
@@ -238,250 +237,32 @@ class RcpspScheduler:
 # Main Execution Block
 # =============================================================================
 
-def main(_):
-    # --- 1. Define Input Data ---
-    # input_data = {
-    #     "project_name": "Cooking",
-    #     "makespan_limit": 200,
-    #     "module_handling_time": 5,
-    #     "locations": [
-    #         {"name": "610", "max_robots": 99},
-    #     ],
-    #     "resources": {
-    #         "robot": [
-    #             {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2}},
-    #             # {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 0}},
-    #         ],
-    #         "module": [
-    #             {"name": "arm_m", "quantity": 10, "capabilities": {"arm": 1}},
-    #         ]
-    #     },
-    #     "tasks": [
-    #         {"name": "cooking XXX", "location": "610",
-    #          "modes": [
-    #              {"duration": 20, "required_capabilities": {"arm": 3}},
-    #              {"duration": 30, "required_capabilities": {"arm": 2}},
-    #              {"duration": 45, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking YYY", "location": "610", "predecessors": ["cooking XXX"],
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 2}},
-    #          ]},
-    #         {"name": "cooking ZZZ", "location": "610", "predecessors": ["cooking YYY"],
-    #          "modes": [
-    #              {"duration": 10, "required_capabilities": {"arm": 2}},
-    #              {"duration": 25, "required_capabilities": {"arm": 1,}},
-    #          ]},
-    #         {"name": "cooking AAA", "location": "610", "predecessors": ["cooking ZZZ"],
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking BBB", "location": "610", "predecessors": ["cooking AAA"],
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking CCC", "location": "610", # "predecessors": ["cooking BBB"],
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking DDD", "location": "610", "predecessors": ["cooking CCC"],
-    #          "modes": [
-    #              {"duration": 10, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking EEE", "location": "610", "predecessors": ["cooking DDD"],
-    #          "modes": [
-    #              {"duration": 10, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking FFF", "location": "610", "predecessors": ["cooking EEE"],
-    #          "modes": [
-    #              {"duration": 10, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking GGG", "location": "610", "predecessors": ["cooking FFF"],
-    #          "modes": [
-    #              {"duration": 10, "required_capabilities": {"arm": 1}},
-    #          ]},
+def main():
+    parser = argparse.ArgumentParser(description="RCPSP Scheduler")
+    parser.add_argument("config_file", type=str, help="Path to the input JSON config file.")
+    parser.add_argument("mode", type=str, choices=["makespan", "modules", "tradeoff"],
+                        help="Execution mode: 'makespan', 'modules', or 'tradeoff'.")
+    args = parser.parse_args()
 
-    #     ]
-    # }
+    try:
+        with open(args.config_file, 'r') as f:
+            input_data = json.load(f)
+    except FileNotFoundError:
+        print(f"Error: Configuration file not found at '{args.config_file}'")
+        return
+    except json.JSONDecodeError:
+        print(f"Error: Could not decode JSON from '{args.config_file}'")
+        return
 
-    # input_data = {
-    #     "project_name": "Clean 602 and 610",
-    #     "makespan_limit": 290,
-    #     "module_handling_time": 5,
-    #     "locations": [
-    #         {"name": "602", "max_robots": 99},
-    #         {"name": "610", "max_robots": 99},
-    #     ],
-    #     "resources": {
-    #         "robot": [
-    #             {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2}},
-    #         ],
-    #         "module": [
-    #             {"name": "arm_m", "quantity": 10, "capabilities": {"arm": 1}},
-    #         ]
-    #     },
-    #     "tasks": [
-    #         {"name": "clean XXX", "location": "602",
-    #          "modes": [
-    #              {"duration": 20, "required_capabilities": {"arm": 3}},
-    #              {"duration": 30, "required_capabilities": {"arm": 2}},
-    #              {"duration": 45, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "clean YYY", "location": "610",
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 3}},
-    #          ]},
-    #         {"name": "clean ZZZ", "location": "610",
-    #          "modes": [
-    #              {"duration": 10, "required_capabilities": {"arm": 2}},
-    #              {"duration": 25, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "clean AAA", "location": "610",
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "clean BBB", "location": "610",
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         # これらのタスクを入れると計算時間が爆発する
-    #         # {"name": "clean CCC", "location": "610",
-    #         #  "modes": [
-    #         #      {"duration": 30, "required_capabilities": {"arm": 1}},
-    #         #  ]},
-    #         # {"name": "clean DDD", "location": "610",
-    #         #  "modes": [
-    #         #      {"duration": 30, "required_capabilities": {"arm": 1}},
-    #         #  ]},
-    #         {"name": "clean EEE", "location": "610",
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "clean FFF", "location": "610",
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "clean GGG", "location": "610",
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #     ]
-    # }
-
-    # input_data = {
-    #     "project_name": "Serial task example",
-    #     "makespan_limit": 300,
-    #     "module_handling_time": 5,
-    #     "locations": [
-    #         {"name": "610", "max_robots": 99},
-    #     ],
-    #     "resources": {
-    #         "robot": [
-    #             # {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2}},
-    #             {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 0}},
-    #         ],
-    #         "module": [
-    #             {"name": "arm_m", "quantity": 10, "capabilities": {"arm": 1}},
-    #         ]
-    #     },
-    #     "tasks": [
-    #         {"name": "cooking 1", "location": "610",
-    #          "modes": [
-    #              {"duration": 20, "required_capabilities": {"arm": 3}},
-    #              {"duration": 30, "required_capabilities": {"arm": 2}},
-    #              {"duration": 45, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking 2", "location": "610", "predecessors": ["cooking 1"],
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 2}},
-    #          ]},
-    #         {"name": "cooking 3", "location": "610", "predecessors": ["cooking 2"],
-    #          "modes": [
-    #              {"duration": 10, "required_capabilities": {"arm": 2}},
-    #              {"duration": 25, "required_capabilities": {"arm": 1,}},
-    #          ]},
-    #         {"name": "cooking 4", "location": "610", "predecessors": ["cooking 3"],
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking 5", "location": "610", "predecessors": ["cooking 4"],
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #         {"name": "cooking 6", "location": "610", "predecessors": ["cooking 5"],
-    #          "modes": [
-    #              {"duration": 30, "required_capabilities": {"arm": 1}},
-    #          ]},
-    #     ]
-    # }
-
-    input_data = {
-        "project_name": "Parallel task example",
-        "makespan_limit": 80,
-        "module_handling_time": 5,
-        "locations": [
-            {"name": "610", "max_robots": 99},
-        ],
-        "resources": {
-            "robot": [
-                {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2}},
-                # {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 0}},
-            ],
-            "module": [
-                {"name": "arm_m", "quantity": 10, "capabilities": {"arm": 1}},
-            ]
-        },
-        "tasks": [
-            {"name": "clean 1", "location": "610",
-             "modes": [
-                 {"duration": 20, "required_capabilities": {"arm": 3}},
-                 # {"duration": 30, "required_capabilities": {"arm": 2}},
-                 # {"duration": 45, "required_capabilities": {"arm": 1}},
-             ]},
-            {"name": "clean 2", "location": "610",
-             "modes": [
-                 {"duration": 30, "required_capabilities": {"arm": 2}},
-             ]},
-            {"name": "clean 3", "location": "610",
-             "modes": [
-                 # {"duration": 10, "required_capabilities": {"arm": 2}},
-                 {"duration": 25, "required_capabilities": {"arm": 1}},
-             ]},
-            {"name": "clean 4", "location": "610",
-             "modes": [
-                 {"duration": 30, "required_capabilities": {"arm": 1}},
-             ]},
-            {"name": "clean 5", "location": "610",
-             "modes": [
-                 {"duration": 30, "required_capabilities": {"arm": 1}},
-             ]},
-            {"name": "clean 6", "location": "610",
-             "modes": [
-                 {"duration": 30, "required_capabilities": {"arm": 1}},
-             ]},
-        ]
-    }
-
-
-    # --- 2. Initialize Scheduler ---
     scheduler = RcpspScheduler(input_data)
-
-    # --- 3. Choose Execution Mode ---
-    # mode = "SINGLE_RUN_MAKESPAN"
-    # mode = "SINGLE_RUN_MODULES"
-    mode = "TRADEOFF_ANALYSIS"
-
-    # --- 4. Run Selected Mode ---
-    if mode == "SINGLE_RUN_MAKESPAN":
+    if args.mode == "makespan":
         scheduler.solve(optimization_mode='MINIMIZE_MAKESPAN', show_results=True)
-    elif mode == "SINGLE_RUN_MODULES":
+    elif args.mode == "modules":
         scheduler.solve(optimization_mode='MINIMIZE_MODULES', show_results=True,
                         makespan_limit=input_data.get("makespan_limit"))
-    elif mode == "TRADEOFF_ANALYSIS":
+    elif args.mode == "tradeoff":
         scheduler.analyze_tradeoff(module_name="arm_m", show_results=False)
 
 
 if __name__ == "__main__":
-    # OR-Toolsのフラグなどを処理するためにapp.runを使用
-    # この呼び出しはヘルパーファイルからインポートしたappオブジェクトを使います
-    h.app.run(main)
+    main()
