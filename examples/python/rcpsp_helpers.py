@@ -185,10 +185,10 @@ def generate_rcpsp_max_from_json(input_data, resolved_task_modes, debug_print=Fa
                 # ロボット/モジュールをRenewableとして専有
                 for res_name in combo:
                     if res_name in robot_map:
-                        demands_w_mode[robot_map[res_name]] = 1
+                        demands_w_mode[robot_map[res_name]] += 1
                         robot_is_used = True
                     elif res_name in module_map:
-                        demands_w_mode[num_actual_robots + module_map[res_name]] = 1
+                        demands_w_mode[num_actual_robots + module_map[res_name]] += 1
                 # ロボットが使われる場合のみ、場所リソースを専有する
                 if location_resource_idx != -1 and robot_is_used:
                     demands_w_mode[location_resource_idx] = 1
@@ -224,14 +224,14 @@ def generate_rcpsp_max_from_json(input_data, resolved_task_modes, debug_print=Fa
                         # 2. ペイロード内のリソースを専有
                         for res_name in payload_combo:
                             if res_name in robot_map:
-                                demands_mode[robot_map[res_name]] = 1
+                                demands_mode[robot_map[res_name]] = +1
                             elif res_name in module_map:
                                 module_idx = module_map[res_name]
                                 # Renewableスロットとして専有
-                                demands_mode[num_actual_robots + module_idx] = 1
+                                demands_mode[num_actual_robots + module_idx] += 1
                                 # Reservoirとして消費または補充
                                 reservoir_idx = num_renewable + module_idx
-                                demands_mode[reservoir_idx] = demand_sign
+                                demands_mode[reservoir_idx] += demand_sign
                         # 3. 場所リソースを専有
                         #    (ロボットが関わるタスクであるため、常に専有する)
                         if location_resource_idx != -1:

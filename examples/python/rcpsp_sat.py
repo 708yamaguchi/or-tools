@@ -138,8 +138,8 @@ class RcpspScheduler:
             return
         print(f"  Initial quantity for module '{module_name}' is {module_upper_limit}.")
 
-        # Step 1: モジュール無制限時の理論上の最短時間を計算
-        print("\n[1/4] Calculating minimum possible makespan (with unlimited modules)...")
+        # Step 1: モジュールを最大限使える場合の理論上の最短時間を計算
+        print("\n[1/4] Calculating minimum possible makespan...")
         res_min_span = self.solve('MINIMIZE_MAKESPAN',
                                    makespan_limit=None, # 上限なしで真の最短時間を探す
                                    module_quantities={module_name: module_upper_limit},
@@ -168,15 +168,12 @@ class RcpspScheduler:
         print(f"\n[3/4] Calculating minimum makespan for each module count (from 0 to {max_modules_needed})...")
         raw_points = []  # (num_modules, makespan) のペアを格納
         upper_bound_makespan = None # 初回の探索では上限は設定しない
-
         for num_modules in range(max_modules_needed + 1):
-            print(f"  - Calculating for {num_modules} module(s)...", end='', flush=True)
-
+            print(f"  - Calculating for {num_modules} modules with makespan limit {upper_bound_makespan} ... ", end='', flush=True)
             res = self.solve('MINIMIZE_MAKESPAN',
                                makespan_limit=upper_bound_makespan, # 計算済みのmakespanを上限として設定
                                module_quantities={module_name: num_modules},
                                show_results=show_results)
-
             if res["status"] in (h.cp_model.OPTIMAL, h.cp_model.FEASIBLE):
                 makespan = int(res["makespan"])
                 raw_points.append((num_modules, makespan))
@@ -192,7 +189,7 @@ class RcpspScheduler:
             print("\n  No feasible solutions found during the analysis. Cannot generate a plot.")
             return
 
-        # Step 4: 描画データの準備とグラフ描画 (旧Step5)
+        # Step 4: 描画データの準備とグラフ描画
         print("\n[4/4] Preparing data and plotting the results...")
 
         makespan_to_min_module = {}
@@ -309,69 +306,117 @@ def main(_):
     #     ]
     # }
 
+    # input_data = {
+    #     "project_name": "Clean 602 and 610",
+    #     "makespan_limit": 290,
+    #     "module_handling_time": 5,
+    #     "locations": [
+    #         {"name": "602", "max_robots": 99},
+    #         {"name": "610", "max_robots": 99},
+    #     ],
+    #     "resources": {
+    #         "robot": [
+    #             {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2}},
+    #         ],
+    #         "module": [
+    #             {"name": "arm_m", "quantity": 10, "capabilities": {"arm": 1}},
+    #         ]
+    #     },
+    #     "tasks": [
+    #         {"name": "clean XXX", "location": "602",
+    #          "modes": [
+    #              {"duration": 20, "required_capabilities": {"arm": 3}},
+    #              {"duration": 30, "required_capabilities": {"arm": 2}},
+    #              {"duration": 45, "required_capabilities": {"arm": 1}},
+    #          ]},
+    #         {"name": "clean YYY", "location": "610",
+    #          "modes": [
+    #              {"duration": 30, "required_capabilities": {"arm": 3}},
+    #          ]},
+    #         {"name": "clean ZZZ", "location": "610",
+    #          "modes": [
+    #              {"duration": 10, "required_capabilities": {"arm": 2}},
+    #              {"duration": 25, "required_capabilities": {"arm": 1}},
+    #          ]},
+    #         {"name": "clean AAA", "location": "610",
+    #          "modes": [
+    #              {"duration": 30, "required_capabilities": {"arm": 1}},
+    #          ]},
+    #         {"name": "clean BBB", "location": "610",
+    #          "modes": [
+    #              {"duration": 30, "required_capabilities": {"arm": 1}},
+    #          ]},
+    #         # これらのタスクを入れると計算時間が爆発する
+    #         # {"name": "clean CCC", "location": "610",
+    #         #  "modes": [
+    #         #      {"duration": 30, "required_capabilities": {"arm": 1}},
+    #         #  ]},
+    #         # {"name": "clean DDD", "location": "610",
+    #         #  "modes": [
+    #         #      {"duration": 30, "required_capabilities": {"arm": 1}},
+    #         #  ]},
+    #         {"name": "clean EEE", "location": "610",
+    #          "modes": [
+    #              {"duration": 30, "required_capabilities": {"arm": 1}},
+    #          ]},
+    #         {"name": "clean FFF", "location": "610",
+    #          "modes": [
+    #              {"duration": 30, "required_capabilities": {"arm": 1}},
+    #          ]},
+    #         {"name": "clean GGG", "location": "610",
+    #          "modes": [
+    #              {"duration": 30, "required_capabilities": {"arm": 1}},
+    #          ]},
+    #     ]
+    # }
+
     input_data = {
-        "project_name": "Clean 602 and 610",
-        "makespan_limit": 290,
+        "project_name": "Serial task example",
+        "makespan_limit": 200,
         "module_handling_time": 5,
         "locations": [
-            {"name": "602", "max_robots": 99},
             {"name": "610", "max_robots": 99},
         ],
         "resources": {
             "robot": [
-                {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2}},
+                # {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2}},
+                {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 0}},
             ],
             "module": [
                 {"name": "arm_m", "quantity": 10, "capabilities": {"arm": 1}},
             ]
         },
         "tasks": [
-            {"name": "clean XXX", "location": "602",
+            {"name": "cooking 1", "location": "610",
              "modes": [
                  {"duration": 20, "required_capabilities": {"arm": 3}},
                  {"duration": 30, "required_capabilities": {"arm": 2}},
                  {"duration": 45, "required_capabilities": {"arm": 1}},
              ]},
-            {"name": "clean YYY", "location": "610",
+            {"name": "cooking 2", "location": "610", "predecessors": ["cooking 1"],
              "modes": [
-                 {"duration": 30, "required_capabilities": {"arm": 3}},
+                 {"duration": 30, "required_capabilities": {"arm": 2}},
              ]},
-            {"name": "clean ZZZ", "location": "610",
+            {"name": "cooking 3", "location": "610", "predecessors": ["cooking 2"],
              "modes": [
                  {"duration": 10, "required_capabilities": {"arm": 2}},
-                 {"duration": 25, "required_capabilities": {"arm": 1}},
+                 {"duration": 25, "required_capabilities": {"arm": 1,}},
              ]},
-            {"name": "clean AAA", "location": "610",
+            {"name": "cooking 4", "location": "610", "predecessors": ["cooking 3"],
              "modes": [
                  {"duration": 30, "required_capabilities": {"arm": 1}},
              ]},
-            {"name": "clean BBB", "location": "610",
+            {"name": "cooking 5", "location": "610", "predecessors": ["cooking 4"],
              "modes": [
                  {"duration": 30, "required_capabilities": {"arm": 1}},
              ]},
-            # これらのタスクを入れると計算時間が爆発する
-            # {"name": "clean CCC", "location": "610",
-            #  "modes": [
-            #      {"duration": 30, "required_capabilities": {"arm": 1}},
-            #  ]},
-            # {"name": "clean DDD", "location": "610",
-            #  "modes": [
-            #      {"duration": 30, "required_capabilities": {"arm": 1}},
-            #  ]},
-            {"name": "clean EEE", "location": "610",
-             "modes": [
-                 {"duration": 30, "required_capabilities": {"arm": 1}},
-             ]},
-            {"name": "clean FFF", "location": "610",
-             "modes": [
-                 {"duration": 30, "required_capabilities": {"arm": 1}},
-             ]},
-            {"name": "clean GGG", "location": "610",
+            {"name": "cooking 6", "location": "610", "predecessors": ["cooking 5"],
              "modes": [
                  {"duration": 30, "required_capabilities": {"arm": 1}},
              ]},
         ]
     }
+
 
     # --- 2. Initialize Scheduler ---
     scheduler = RcpspScheduler(input_data)
