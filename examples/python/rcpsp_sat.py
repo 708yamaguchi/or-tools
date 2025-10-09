@@ -234,6 +234,7 @@ class RcpspScheduler:
         plt.ylabel(f'Minimum Required "{module_name}" Modules', fontsize=12)
         plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.grid(axis='x', linestyle=':', alpha=0.5)
+        plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
         plt.gca().yaxis.set_major_locator(MaxNLocator(integer=True))
         plt.legend()
         plt.tight_layout()
