@@ -226,9 +226,22 @@ class RcpspScheduler:
         # グラフの描画
         plt.figure(figsize=(12, 7))
         # ステッププロットで「最適なトレードオフ曲線」を描画
-        plt.step(filtered_x, filtered_y, where='post', linestyle='-', label='Optimal Trade-off')
+        step_plot_lines = plt.step(filtered_x, filtered_y, where='post', linestyle='-', label='Optimal Trade-off')
         # 散布図で「全てのデータ点」を描画。zorder=3 で線より手前に点を表示, s=50でマーカーサイズを調整
         plt.scatter(all_x, all_y, marker='o', zorder=3, s=50, label='All Data Points')
+        # グラフの上側と右側に直線を外挿
+        min_x = min(p[0] for p in points)
+        points_at_min_x = [p for p in points if p[0] == min_x]
+        start_point_up = max(points_at_min_x, key=lambda p: p[1])
+        max_x = max(p[0] for p in points)
+        points_at_max_x = [p for p in points if p[0] == max_x]
+        start_point_right = min(points_at_max_x, key=lambda p: p[1])
+        line_color = step_plot_lines[0].get_color()
+        _, xmax = plt.xlim()
+        _, ymax = plt.ylim()
+        plt.plot([start_point_up[0], start_point_up[0]], [start_point_up[1], ymax], linestyle='-', color=line_color)
+        plt.plot([start_point_right[0], xmax], [start_point_right[1], start_point_right[1]], linestyle='-', color=line_color)
+
         plt.title(f'Trade-off: Makespan vs. Required "{module_name}" Modules', fontsize=16)
         plt.xlabel('Allowed Project Makespan (Time)', fontsize=12)
         plt.ylabel(f'Minimum Required "{module_name}" Modules', fontsize=12)
@@ -263,9 +276,11 @@ def main():
 
     scheduler = RcpspScheduler(input_data)
     if args.mode == "makespan":
-        scheduler.solve(optimization_mode='MINIMIZE_MAKESPAN', show_results=True)
+        scheduler.solve(optimization_mode='MINIMIZE_MAKESPAN',
+                        show_results=True)
     elif args.mode == "modules":
-        scheduler.solve(optimization_mode='MINIMIZE_MODULES', show_results=True,
+        scheduler.solve(optimization_mode='MINIMIZE_MODULES',
+                        show_results=True,
                         makespan_limit=input_data.get("makespan_limit"))
     elif args.mode == "tradeoff":
         scheduler.analyze_tradeoff(module_name="arm_m", show_results=False)
