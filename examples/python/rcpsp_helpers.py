@@ -1711,26 +1711,23 @@ def setup_rcpsp_problem(input_data: dict, show_debug_prints=False) -> (rcpsp_pb2
 
 
 def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bool = False):
-    """並列化ポテンシャル指標と、その詳細な途中経過を出力します。(最終版)
+    """タスク群の並列化ポテンシャルを分析し、その詳細な計算過程を出力します。
 
-    脱着式アームを持つ単一ロボットシステムを対象に、与えられたタスク群の
-    並列処理への適合度を評価する指標を算出します。指標が高いほど、タスク群が
-    並列化に適しており、プロジェクト全体の大幅な時間短縮が見込めることを意味します。
+    脱着式アームを持つ単一ロボットシステムを対象に、与えられたタスク群が持つ
+    並列処理のポテンシャルを定量的に分析するための関数です。シミュレーション等の
+    結果と合わせて用いることで、なぜ特定のタスク群が高い並列化効果を示すのか、
+    その構造的な要因を理解するための一助となります。
+    （注：定量的な指標を提案するわけではない）
 
-    指標の計算方法と意義:
-    --------------------
-    この指標は「プロジェクト全体を通し、真の並列実行の機会がどれだけあるか」を
-    評価します。そのため、シリアルな（直線的な）タスク群は低く、パラレルな
-    （幅が広い）タスク群は高く評価されます。計算は以下のステップで行われます。
+    分析モデルの概要:
+    ----------------
+    この分析は「ロボットによるアームの脱着コストを考慮した上で、真に有効な並列実行の
+    機会がどれだけ存在するか」を評価する考え方に基づいています。計算は以下の
+    ステップで行われます。
 
-    1. タスク構造の解析 (DAG & Layering):
-       この関数は、タスクの依存関係が有向非巡回グラフ（DAG: Directed Acyclic
-       Graph）で表現されることを前提とします。これは、A→B→Aのような循環依存が
-       ない、実行可能なプロジェクト計画を意味します。
-
-       最初に、このDAG構造を「トポロジカルソート」アルゴリズムで解析し、同時に
-       実行可能なタスク群である階層（Layer）へと分類します。多重依存関係も
-       正確に扱われ、各タスクはただ一つの階層に重複なく所属します。
+    1. タスク構造の階層化 (Layering based on DAG):
+       タスクの依存関係（DAG）をトポロジカルソートで解析し、同時に実行
+       可能なタスク群である「階層（Layer）」へと分類します。
 
     2. 階層ごとのポテンシャル計算:
        各階層を独立して評価し、「並列化ポテンシャル」を算出します。ポテンシャルは、
@@ -1743,8 +1740,8 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
        上記の条件をクリアした場合のみ、利益の大きい上位k個のタスクの利益を合計し、
        その階層のポテンシャルとします。
 
-    3. 主な計算指標:
-       ポテンシャル計算には、以下の指標が用いられます。
+    3. 主な計算要素:
+       分析には、以下の要素が用いられます。
        - 利益 (Profit): アーム利用によってロボットが解放される時間。
          計算式: `タスク時間 - アーム設置回収オーバーヘッド`
 
@@ -1759,18 +1756,18 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
     4. 集計と正規化 (Aggregation & Normalization):
        各階層で算出されたポテンシャルを合計し、「総戦略的ポテンシャル」を求めます。
        これをプロジェクト全体の総作業時間で割ることで、規模の異なるプロジェクト間でも
-       比較可能な、正規化された最終指標を算出します。
+       比較可能な、正規化された値を算出します。
 
-    この指標が苦手とする状況 (Limitations):
-    --------------------
-    この指標はヒューリスティック（経験則）であり、以下の状況ではポテンシャルを
-    過大・過小評価する可能性があります。
-    - タスク時間の不均一性: 階層内に極端に長いタスクと短いタスクが混在すると、
-      平均値に基づくN_maxの計算が不正確になり得ます。
-    - 並列化の局所性: 短い並列フェーズの後に長い直列フェーズが続く場合、
-      プロジェクト全体の実態よりもポテンシャルを高く評価する傾向があります。
-    - 戦略の貪欲性: 目先の利益が最大になるようにタスクを選択するため、
-      将来の並列性を高めるような、長期的に最適な選択を行えるとは限りません。
+    この分析モデルの単純化と限界 (Simplifications & Limitations):
+    ---------------------------------
+    この計算は、問題の構造を理解しやすくするためのヒューリスティックです。
+    以下の点を単純化しているため、算出される値はあくまで傾向を把握するため
+    のものであり、絶対的な性能を予測するものではありません。
+
+    - タスク時間の均一性: N_maxの計算に平均値を用いているため、階層内の
+      タスク時間に大きなばらつきがあると、モデルの精度が低下する可能性があります。
+    - 貪欲な選択: 各階層で目先の利益が最大になるようにタスクを選択するため、
+      必ずしもプロジェクト全体で最適な選択になるとは限りません。
 
     Args:
         data (dict):
@@ -1780,7 +1777,7 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
             Trueの場合、利用可能なアームの物理的な数を並列化上限に含めます。
             デフォルトは False です。
     """
-    print("--- 並列化ポテンシャル指標 詳細計算レポート (最終版) ---")
+    print("--- 分析モデル 詳細計算レポート ---")
 
     # 1. 初期設定
     d = data.get("module_handling_time")
@@ -1871,22 +1868,22 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
 
         total_strategic_potential += layer_potential
 
-    # 4. 最終指標の計算
-    print("\n[ステップ3: 最終指標の計算]")
+    # 4. 値の計算
+    print("\n[ステップ3: 分析モデルによるサマリー]")
     print(f"・プロジェクト全体の総作業時間: {project_total_duration}")
-    print(f"・全階層の合計戦略的ポテンシャル: {total_strategic_potential:.2f}")
+    print(f"・並列化による利益の総量（ポテンシャル合計）: {total_strategic_potential:.2f}")
 
     if project_total_duration > 0:
-        final_index = total_strategic_potential / project_total_duration
+        final_score = total_strategic_potential / project_total_duration
     else:
-        final_index = 0.0
+        final_score = 0.0
 
-    print("\n==================== 最終結果 ====================")
-    print(f"正規化ポテンシャルインデックス: {final_index:.4f}")
-    if final_index >= 0.7: evaluation = "Excellent (非常に高い) 🌟"
-    elif final_index >= 0.4: evaluation = "Good (高い) 👍"
-    elif final_index >= 0.1: evaluation = "Moderate (中程度) 🤔"
-    elif final_index > 0: evaluation = "Poor (低い) 👎"
+    print("\n==================== 分析サマリー ====================")
+    print(f"正規化ポテンシャルスコア: {final_score:.4f}")
+    if final_score >= 0.7: evaluation = "Excellent (非常に高い) 🌟"
+    elif final_score >= 0.4: evaluation = "Good (高い) 👍"
+    elif final_score >= 0.1: evaluation = "Moderate (中程度) 🤔"
+    elif final_score > 0: evaluation = "Poor (低い) 👎"
     else: evaluation = "Unsuitable (不適合) ❌"
     print(f"評価: {evaluation}")
-    print("-------------------- レポート終了 --------------------")
+    print("-------------------- 分析レポート終了 --------------------")

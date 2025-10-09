@@ -194,6 +194,29 @@ class RcpspScheduler:
             print("\n  No feasible solutions found during the analysis. Cannot generate a plot.")
             return
 
+        # [+] 分析モデルとの比較指標を計算 ============================================
+        print("\n[+] 分析モデルとの比較用指標を算出...")
+        sorted_points = sorted(raw_points, key=lambda x: x[0])
+        if len(sorted_points) >= 2:
+            # 解が見つかった最小と最大のモジュール数とその時の時間を取得
+            min_module_num, makespan_at_min_modules = sorted_points[0]
+            max_module_num, makespan_at_max_modules = sorted_points[-1]
+            print(f"  - ベースライン時間 (モジュール{min_module_num}台): {makespan_at_min_modules}")
+            print(f"  - 短縮後の時間 (モジュール{max_module_num}台): {makespan_at_max_modules}")
+            # ゼロ除算と、時間が増加していないかをチェック
+            if makespan_at_min_modules > 0 and makespan_at_min_modules > makespan_at_max_modules:
+                # 計算式: (ベースライン時間 - 短縮後の時間) / ベースライン時間
+                reduction_rate = (makespan_at_min_modules - makespan_at_max_modules) / makespan_at_min_modules
+
+                print("─" * 35)
+                print(f"  メイクスパン短縮率（最適化結果）: {reduction_rate:.4f} ✨")
+                print("─" * 35)
+                print("  (この値は、分析モデルの「正規化ポテンシャルスコア」と比較できます)")
+            else:
+                print("  - 時間短縮が見られなかったため、短縮率は計算しませんでした。")
+        else:
+            print("  - 比較可能なデータ点が2つ未満のため、短縮率は計算できませんでした。")
+
         # Step 4: 描画データの準備とグラフ描画
         print("\n[4/4] Preparing data and plotting the results...")
 
