@@ -274,6 +274,8 @@ def main():
         print(f"Error: Could not decode JSON from '{args.config_file}'")
         return
 
+    h.calculate_and_print_potential_details(input_data)
+
     scheduler = RcpspScheduler(input_data)
     if args.mode == "makespan":
         scheduler.solve(optimization_mode='MINIMIZE_MAKESPAN',

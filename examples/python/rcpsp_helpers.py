@@ -1,9 +1,11 @@
 # rcpsp_helpers.py
 
 import collections
+import math
 import tempfile
 from itertools import combinations
 from collections import Counter
+from collections import deque
 
 from google.protobuf import text_format
 from ortools.sat.python import cp_model
@@ -1688,7 +1690,7 @@ def setup_rcpsp_problem(input_data: dict, show_debug_prints=False) -> (rcpsp_pb2
 
     rcpsp_data_string, mode_to_resources_map = generate_rcpsp_max_from_json(
         input_data, resolved_task_modes, debug_print=show_debug_prints)
-    
+
     if show_debug_prints:
         print("\n" + "="*25 + " RCPSP/max Data " + "="*25)
         print(rcpsp_data_string)
@@ -1706,3 +1708,185 @@ def setup_rcpsp_problem(input_data: dict, show_debug_prints=False) -> (rcpsp_pb2
         print_problem_statistics(problem)
 
     return problem, mode_to_resources_map, resolved_task_modes, recipe_to_caps_map
+
+
+def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bool = False):
+    """並列化ポテンシャル指標と、その詳細な途中経過を出力します。(最終版)
+
+    脱着式アームを持つ単一ロボットシステムを対象に、与えられたタスク群の
+    並列処理への適合度を評価する指標を算出します。指標が高いほど、タスク群が
+    並列化に適しており、プロジェクト全体の大幅な時間短縮が見込めることを意味します。
+
+    指標の計算方法と意義:
+    --------------------
+    この指標は「プロジェクト全体を通し、真の並列実行の機会がどれだけあるか」を
+    評価します。そのため、シリアルな（直線的な）タスク群は低く、パラレルな
+    （幅が広い）タスク群は高く評価されます。計算は以下のステップで行われます。
+
+    1. タスク構造の解析 (DAG & Layering):
+       この関数は、タスクの依存関係が有向非巡回グラフ（DAG: Directed Acyclic
+       Graph）で表現されることを前提とします。これは、A→B→Aのような循環依存が
+       ない、実行可能なプロジェクト計画を意味します。
+
+       最初に、このDAG構造を「トポロジカルソート」アルゴリズムで解析し、同時に
+       実行可能なタスク群である階層（Layer）へと分類します。多重依存関係も
+       正確に扱われ、各タスクはただ一つの階層に重複なく所属します。
+
+    2. 階層ごとのポテンシャル計算:
+       各階層を独立して評価し、「並列化ポテンシャル」を算出します。ポテンシャルは、
+       階層内で2つ以上のタスクによる真の並列実行が可能な場合にのみ計上されます。
+
+       具体的には、以下のいずれかに該当する場合、階層のポテンシャルは【0】となります。
+       ・階層内に「アーム向きタスク」が1つ以下しか存在しない。
+       ・アーム向きタスクが複数あっても、制約により「戦略的並列化数(k)」が1以下になる。
+
+       上記の条件をクリアした場合のみ、利益の大きい上位k個のタスクの利益を合計し、
+       その階層のポテンシャルとします。
+
+    3. 主な計算指標:
+       ポテンシャル計算には、以下の指標が用いられます。
+       - 利益 (Profit): アーム利用によってロボットが解放される時間。
+         計算式: `タスク時間 - アーム設置回収オーバーヘッド`
+
+       - 有効並列化上限 (N_max): ロボットが理論上、同時に維持管理できるアームの最大数。
+         計算式: `(アーム向きタスクの平均時間 / 片道移動時間) + 1`
+
+       - 戦略的並列化数 (k): 現実的な制約を全て考慮して決定される、
+         その階層で実際に並列実行するタスクの数。
+         計算式: `min(アーム向きタスク数, N_maxの整数部, [物理アーム数])`
+         なお、物理アーム数は use_physical_arm_limit=True の場合のみ考慮。
+
+    4. 集計と正規化 (Aggregation & Normalization):
+       各階層で算出されたポテンシャルを合計し、「総戦略的ポテンシャル」を求めます。
+       これをプロジェクト全体の総作業時間で割ることで、規模の異なるプロジェクト間でも
+       比較可能な、正規化された最終指標を算出します。
+
+    この指標が苦手とする状況 (Limitations):
+    --------------------
+    この指標はヒューリスティック（経験則）であり、以下の状況ではポテンシャルを
+    過大・過小評価する可能性があります。
+    - タスク時間の不均一性: 階層内に極端に長いタスクと短いタスクが混在すると、
+      平均値に基づくN_maxの計算が不正確になり得ます。
+    - 並列化の局所性: 短い並列フェーズの後に長い直列フェーズが続く場合、
+      プロジェクト全体の実態よりもポテンシャルを高く評価する傾向があります。
+    - 戦略の貪欲性: 目先の利益が最大になるようにタスクを選択するため、
+      将来の並列性を高めるような、長期的に最適な選択を行えるとは限りません。
+
+    Args:
+        data (dict):
+            タスク定義を含むJSONデータを読み込んだ辞書。
+            'module_handling_time', 'tasks' のキーが必要です。
+        use_physical_arm_limit (bool, optional):
+            Trueの場合、利用可能なアームの物理的な数を並列化上限に含めます。
+            デフォルトは False です。
+    """
+    print("--- 並列化ポテンシャル指標 詳細計算レポート (最終版) ---")
+
+    # 1. 初期設定
+    d = data.get("module_handling_time")
+    tasks_list = data.get("tasks", [])
+    if not d or not tasks_list:
+        print("エラー: 'module_handling_time' または 'tasks' が見つかりません。")
+        return
+    try:
+        num_available_arms = data["resources"]["module"][0]["quantity"]
+    except (KeyError, IndexError):
+        num_available_arms = 0
+    overhead = 2 * d
+
+    # 2. 依存関係グラフの構築と階層化 (トポロジカルソート)
+    print("\n[ステップ1: タスク依存関係の階層化]")
+    task_map = {task['name']: task for task in tasks_list}
+    in_degree = {name: 0 for name in task_map}
+    adj_list = {name: [] for name in task_map}
+
+    for name, task in task_map.items():
+        for pred in task.get("predecessors", []):
+            adj_list[pred].append(name)
+            in_degree[name] += 1
+
+    queue = deque([name for name, degree in in_degree.items() if degree == 0])
+    layers, processed_count = [], 0
+    while queue:
+        current_layer_tasks = [task_map[name] for name in queue]
+        layers.append(current_layer_tasks)
+
+        next_queue = deque()
+        for task_name in queue:
+            processed_count += 1
+            for successor_name in adj_list[task_name]:
+                in_degree[successor_name] -= 1
+                if in_degree[successor_name] == 0:
+                    next_queue.append(successor_name)
+        queue = next_queue
+
+    if processed_count != len(task_map):
+        print("\nエラー: タスク間に循環参照が存在するため、解析を中断しました。")
+        return
+
+    for i, layer in enumerate(layers):
+        task_names = [t['name'] for t in layer]
+        print(f"・階層 {i}: {', '.join(task_names)}")
+
+    # 3. 階層ごとのポテンシャル計算と集計
+    print("\n[ステップ2: 階層ごとのポテンシャル計算]")
+    total_strategic_potential = 0
+    project_total_duration = sum(t['modes'][0]['duration'] for t in tasks_list)
+
+    for i, layer_tasks in enumerate(layers):
+        print(f"\n--- <階層 {i} の分析> ---")
+        layer_potential = 0
+        arm_oriented_tasks = []
+        # 最初に階層内の全タスクを分析し、結果を表示
+        for task in layer_tasks:
+            t = task["modes"][0]["duration"]
+            profit = t - overhead
+            if profit > 0:
+                arm_oriented_tasks.append({"name": task["name"], "duration": t, "profit": profit})
+                print(f"  - {task['name']:<10} | 時間(t): {t:<3}, 利益(t-2d): {profit:<5.2f} -> アーム向き◎")
+            else:
+                print(f"  - {task['name']:<10} | 時間(t): {t:<3}, 利益(t-2d): {profit:<5.2f} -> アーム不向き×")
+
+        # 分析結果に基づいてポテンシャルを評価
+        if len(arm_oriented_tasks) > 1:
+            avg_t = sum(t["duration"] for t in arm_oriented_tasks) / len(arm_oriented_tasks)
+            n_max = (avg_t / d) + 1
+            print(f"\n・有効並列化上限N_max 計算: (アーム向きタスクの平均時間 {avg_t:.2f}) / (片道移動時間 {d}) = {n_max:.2f}")
+
+            if use_physical_arm_limit:
+                k = int(min(len(arm_oriented_tasks), math.floor(n_max), num_available_arms))
+                print(f"・戦略的並列化数k 計算: min(タスク数 {len(arm_oriented_tasks)}, floor(N_max) {math.floor(n_max)}, 物理アーム数 {num_available_arms}) = {k}")
+            else:
+                k = int(min(len(arm_oriented_tasks), math.floor(n_max)))
+                print(f"・k 計算: min(タスク数 {len(arm_oriented_tasks)}, floor(N_max) {math.floor(n_max)}) = {k}")
+            if k > 1:
+                arm_oriented_tasks.sort(key=lambda x: x["profit"], reverse=True)
+                layer_potential = sum(task['profit'] for task in arm_oriented_tasks[:k])
+                print(f"  -> 並列実行可能と判断。この階層のポテンシャル: {layer_potential:.2f}")
+            else:
+                print("  -> 並列化上限(k)が1以下の為、並列実行のメリットがありません。ポテンシャル: 0")
+        else:
+            print(f"・アーム向きタスク数: {len(arm_oriented_tasks)}")
+            print("  -> タスクが1つ以下のため、並列実行のメリットがありません。ポテンシャル: 0")
+
+        total_strategic_potential += layer_potential
+
+    # 4. 最終指標の計算
+    print("\n[ステップ3: 最終指標の計算]")
+    print(f"・プロジェクト全体の総作業時間: {project_total_duration}")
+    print(f"・全階層の合計戦略的ポテンシャル: {total_strategic_potential:.2f}")
+
+    if project_total_duration > 0:
+        final_index = total_strategic_potential / project_total_duration
+    else:
+        final_index = 0.0
+
+    print("\n==================== 最終結果 ====================")
+    print(f"正規化ポテンシャルインデックス: {final_index:.4f}")
+    if final_index >= 0.7: evaluation = "Excellent (非常に高い) 🌟"
+    elif final_index >= 0.4: evaluation = "Good (高い) 👍"
+    elif final_index >= 0.1: evaluation = "Moderate (中程度) 🤔"
+    elif final_index > 0: evaluation = "Poor (低い) 👎"
+    else: evaluation = "Unsuitable (不適合) ❌"
+    print(f"評価: {evaluation}")
+    print("-------------------- レポート終了 --------------------")
