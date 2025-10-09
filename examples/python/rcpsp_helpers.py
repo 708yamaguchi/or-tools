@@ -71,6 +71,8 @@ def generate_rcpsp_max_from_json(input_data, resolved_task_modes, debug_print=Fa
     module_map = {res['name']: i for i, res in enumerate(actual_modules)}
 
     module_handling_time = input_data.get("module_handling_time", 5)
+    if type(module_handling_time) != int or module_handling_time <= 0:
+        raise ValueError(f"module_handling_time '{module_handling_time}' must be int and greater than 0")
 
     # 場所情報の読み込み
     locations = input_data.get('locations', [])
