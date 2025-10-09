@@ -1753,6 +1753,25 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
          計算式: `min(アーム向きタスク数, N_maxの整数部, [物理アーム数])`
          なお、物理アーム数は use_physical_arm_limit=True の場合のみ考慮。
 
+       a. 協働作業モード (Cooperative Mode)
+          - 条件: d < T / (N-1)
+          - 概要: 脱着コストが非常に低く、ロボットはアーム設置後に手待ち時間が
+            発生します。その時間を利用して自身も(k+1)番目のタスクに参加し、
+            並列度を最大化するのが最適な戦略です。
+          - ポテンシャル計算: (アームk台分の利益) + (ロボットが実行するタスクの作業時間)
+
+       b. アーム主導モード (Arm-led Mode)
+          - 条件: T / (N-1) <= d < T/2
+          - 概要: 脱着コストが中程度の場合、ロボットは新たな作業をせず、アームの
+            設置・回収という管理タスクに専念するのが最も効率的です。
+          - ポテンシャル計算: (アームk台分の利益)
+
+       c. ロボット単独モード (Robot-only Mode)
+          - 条件: d >= T/2 または N <= 1
+          - 概要: 脱着コストが高すぎるか、並列化対象タスクが1つ以下のため、
+            アームを使わずにロボット自身が作業する方が速い状態です。
+          - ポテンシャル計算: 0 (並列化による追加の利益なし)
+
     4. 集計と正規化 (Aggregation & Normalization):
        各階層で算出されたポテンシャルを合計し、「総戦略的ポテンシャル」を求めます。
        これをプロジェクト全体の総作業時間で割ることで、規模の異なるプロジェクト間でも
@@ -1826,45 +1845,77 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
         print(f"・階層 {i}: {', '.join(task_names)}")
 
     # 3. 階層ごとのポテンシャル計算と集計
-    print("\n[ステップ2: 階層ごとのポテンシャル計算]")
+    print("\n[ステップ2: 階層ごとの最適モード判定とポテンシャル計算]")
     total_strategic_potential = 0
     project_total_duration = sum(t['modes'][0]['duration'] for t in tasks_list)
 
     for i, layer_tasks in enumerate(layers):
         print(f"\n--- <階層 {i} の分析> ---")
         layer_potential = 0
+
         arm_oriented_tasks = []
-        # 最初に階層内の全タスクを分析し、結果を表示
         for task in layer_tasks:
             t = task["modes"][0]["duration"]
-            profit = t - overhead
-            if profit > 0:
-                arm_oriented_tasks.append({"name": task["name"], "duration": t, "profit": profit})
-                print(f"  - {task['name']:<10} | 時間(t): {t:<3}, 利益(t-2d): {profit:<5.2f} -> アーム向き◎")
-            else:
-                print(f"  - {task['name']:<10} | 時間(t): {t:<3}, 利益(t-2d): {profit:<5.2f} -> アーム不向き×")
+            if (t - 2 * d) > 0: # 利益が正のタスクのみを抽出
+                arm_oriented_tasks.append({"name": task["name"], "duration": t, "profit": t - 2 * d})
 
-        # 分析結果に基づいてポテンシャルを評価
-        if len(arm_oriented_tasks) > 1:
-            avg_t = sum(t["duration"] for t in arm_oriented_tasks) / len(arm_oriented_tasks)
-            n_max = (avg_t / d) + 1
-            print(f"\n・有効並列化上限N_max 計算: (アーム向きタスクの平均時間 {avg_t:.2f}) / (片道移動時間 {d}) = {n_max:.2f}")
+        # --- モード判定のためのパラメータを定義 ---
+        N = len(arm_oriented_tasks)
 
-            if use_physical_arm_limit:
-                k = int(min(len(arm_oriented_tasks), math.floor(n_max), num_available_arms))
-                print(f"・戦略的並列化数k 計算: min(タスク数 {len(arm_oriented_tasks)}, floor(N_max) {math.floor(n_max)}, 物理アーム数 {num_available_arms}) = {k}")
+        # --- 【ベースケース】 N=1 以下の場合の処理 ---
+        if N <= 1:
+            print(f"  - パラメータ: N={N}")
+            print("  -> 最適モード: ロボット単独 (並列化の対象となるタスクが1つ以下)")
+            print("  -> ポテンシャル: 0")
+            # total_strategic_potential への加算はループの最後で行うため、ここでは何もしない
+
+        # --- 【一般ケース】 N≧2 の場合の処理 ---
+        else:
+            T = sum(t["duration"] for t in arm_oriented_tasks) / N
+            print(f"  - パラメータ: N={N}, T={T:.2f}, d={d}")
+
+            # --- 理論に基づき最適モードを判定 ---
+            boundary_robot_only = T / 2.0
+            boundary_cooperative = T / (N - 1)
+
+            if d >= boundary_robot_only:
+                # === 領域3: ロボット単独モード ===
+                print(f"  -> 最適モード: ロボット単独 (d >= T/2 = {boundary_robot_only:.2f})")
+                print("  -> 脱着コストが高すぎるため、ポテンシャル: 0")
+
+            elif d < boundary_cooperative:
+                # === 領域1: 協働作業モード ===
+                print(f"  -> 最適モード: 協働作業 (d < T/(N-1) = {boundary_cooperative:.2f})")
+
+                n_max = (T / (d if d > 0 else 1e-9)) + 1
+                k = int(min(N, math.floor(n_max)))
+                if use_physical_arm_limit:
+                    k = min(k, num_available_arms)
+                print(f"  -> N_max={n_max:.2f}, 最終的な並列数 k={k}")
+
+                arm_oriented_tasks.sort(key=lambda x: x["profit"], reverse=True)
+
+                arm_potential = sum(task['profit'] for task in arm_oriented_tasks[:k])
+                robot_task_potential = 0
+                if N > k:
+                    robot_task_potential = arm_oriented_tasks[k]["duration"]
+
+                layer_potential = arm_potential + robot_task_potential
+                print(f"  -> ポテンシャル(アーム利益 {arm_potential:.2f} + ロボット作業価値 {robot_task_potential:.2f}): {layer_potential:.2f}")
+
             else:
-                k = int(min(len(arm_oriented_tasks), math.floor(n_max)))
-                print(f"・k 計算: min(タスク数 {len(arm_oriented_tasks)}, floor(N_max) {math.floor(n_max)}) = {k}")
-            if k > 1:
+                # === 領域2: アーム主導モード ===
+                print(f"  -> 最適モード: アーム主導 (T/(N-1) <= d < T/2)")
+
+                n_max = (T / (d if d > 0 else 1e-9)) + 1
+                k = int(min(N, math.floor(n_max)))
+                if use_physical_arm_limit:
+                    k = min(k, num_available_arms)
+                print(f"  -> N_max={n_max:.2f}, 最終的な並列数 k={k}")
+
                 arm_oriented_tasks.sort(key=lambda x: x["profit"], reverse=True)
                 layer_potential = sum(task['profit'] for task in arm_oriented_tasks[:k])
-                print(f"  -> 並列実行可能と判断。この階層のポテンシャル: {layer_potential:.2f}")
-            else:
-                print("  -> 並列化上限(k)が1以下の為、並列実行のメリットがありません。ポテンシャル: 0")
-        else:
-            print(f"・アーム向きタスク数: {len(arm_oriented_tasks)}")
-            print("  -> タスクが1つ以下のため、並列実行のメリットがありません。ポテンシャル: 0")
+                print(f"  -> ポテンシャル(アーム利益のみ): {layer_potential:.2f}")
 
         total_strategic_potential += layer_potential
 
