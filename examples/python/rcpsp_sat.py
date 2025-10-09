@@ -113,116 +113,129 @@ class RcpspScheduler:
         else:
             return {"status": status, "makespan": float('inf'), "modules": float('inf')}
 
-    def analyze_tradeoff(self, module_name: str = "arm_m", show_results: bool = False):
+    def _find_analysis_boundaries(self, module_name: str, show_results: bool = False) -> dict:
         """
-        Makespan（完了時間）と特定モジュールの必要数のトレードオフ関係を分析し、グラフ化します。
-
-        Args:
-            module_name (str): 分析対象とするモジュールの名前。
+        分析に必要な境界条件（モジュール上限、最短メイクスパン、その時のモジュール数）を計算します。
         """
-        print("\n" + "="*15 + "    Starting Makespan vs. Module Trade-off Analysis " + "="*15)
+        print(f"\nFinding analysis boundaries for module: '{module_name}'")
 
-        # Step 0: モジュール数上限を取得
-        module_upper_limit = None
-        # 'resources'や'module'キーが存在しない場合も考慮し、安全にリストを取得
-        modules_list = self.base_input_data.get("resources", {}).get("module", [])
-        # モジュールリストをループして、指定された名前のモジュールを探す
-        for module in modules_list:
-            if module.get("name") == module_name:
-                module_upper_limit = module.get("quantity")
-                break  # 対象モジュールが見つかったのでループを終了
-        # 対象モジュールが入力データに見つからなかった場合はエラーとして処理を中断
+        # Step 0: モジュール数の上限を取得
+        module_upper_limit = next((m.get("quantity") for m in self.base_input_data.get("resources", {}).get("module", []) if m.get("name") == module_name), None)
         if module_upper_limit is None:
-            print(f"  Error: Module '{module_name}' not found in the input data's resources. Aborting analysis.")
-            return
+            print(f"  Error: Module '{module_name}' not found. Aborting.")
+            return {"success": False}
         print(f"  Initial quantity for module '{module_name}' is {module_upper_limit}.")
 
         # Step 1: モジュールを最大限使える場合の理論上の最短時間を計算
-        print("\n[1/4] Calculating minimum possible makespan...")
-        res_min_span = self.solve('MINIMIZE_MAKESPAN',
-                                   makespan_limit=None, # 上限なしで真の最短時間を探す
-                                   module_quantities={module_name: module_upper_limit},
-                                   show_results=show_results)
+        print("\n[1/2] Calculating minimum possible makespan...")
+        res_min_span = self.solve('MINIMIZE_MAKESPAN', module_quantities={module_name: module_upper_limit}, show_results=show_results)
         if res_min_span["status"] == h.cp_model.INFEASIBLE:
-            print("  Error: Could not find a solution even with unlimited modules. Aborting analysis.")
-            return
+            print("  Error: Could not find a solution even with maximum modules. Aborting.")
+            return {"success": False}
         min_makespan = res_min_span["makespan"]
-        print(f"    Minimum makespan: {min_makespan}")
+        print(f"    -> Minimum makespan: {min_makespan}")
 
         # Step 2: Step1で得られた最短時間で実行するために必要なモジュール数を確認
-        print(f"\n[2/4] Calculating modules needed for the minimum makespan of {int(min_makespan)}...")
-        res_max_modules = self.solve('MINIMIZE_MODULES',
-                                     makespan_limit=int(min_makespan),
-                                     module_quantities={module_name: module_upper_limit},
-                                     show_results=show_results)
+        print(f"\n[2/2] Calculating modules needed for the minimum makespan of {int(min_makespan)}...")
+        res_max_modules = self.solve('MINIMIZE_MODULES', makespan_limit=int(min_makespan), module_quantities={module_name: module_upper_limit}, show_results=show_results)
         if res_max_modules["status"] == h.cp_model.INFEASIBLE:
-            print(f"  Error: Could not find a solution for makespan {int(min_makespan)}. This should not happen. Aborting.")
-            return
-        max_modules_needed = res_max_modules["modules"]
-        max_modules_needed = min(max_modules_needed, module_upper_limit)
-        print(f"    Max modules needed for minimum makespan: {max_modules_needed}")
-        # Step1で設定したモジュール数の上限に達した場合に警告を出力
-        if max_modules_needed == module_upper_limit:
-            print("\n  ⚠️ WARNING: The number of modules required to achieve the minimum makespan "
-                  f"is equal to the initial upper limit ({module_upper_limit}).")
-            print("              This may indicate that the 'quantity' for this module is a bottleneck. "
-                  "A shorter makespan might be achievable if more modules were available.")
+            print(f"  Error: Could not find a solution for makespan {int(min_makespan)}. Aborting.")
+            return {"success": False}
+        max_modules_needed = min(res_max_modules["modules"], module_upper_limit)
+        print(f"    -> Max modules needed for minimum makespan: {max_modules_needed}")
 
-        # Step 3: モジュール数を0から順に増やし、makespanを計算 (旧Step3とStep4を統合)
-        # 前回のmakespanを次の上限として利用し、探索を効率化
-        print(f"\n[3/4] Calculating minimum makespan for each module count (from 0 to {max_modules_needed})...")
-        raw_points = []  # (num_modules, makespan) のペアを格納
-        upper_bound_makespan = None # 初回の探索では上限は設定しない
+        return {
+            "success": True,
+            "module_upper_limit": module_upper_limit,
+            "min_makespan": min_makespan,
+            "max_modules_needed": max_modules_needed
+        }
+
+    def analyze_potential(self, module_name: str = "arm_m"):
+        """
+        並列化によるメイクスパン短縮率を計算します。始点と終点の2点のみを効率的に計算します。
+        """
+        print("\n" + "="*15 + "    並列化ポテンシャル分析を開始 " + "="*15)
+
+        # Step 1-2: 境界条件（主に終点データ）を取得
+        boundaries = self._find_analysis_boundaries(module_name, show_results=False)
+        if not boundaries["success"]:
+            return
+
+        # Step 3: 解が見つかる最小のモジュール数（始点データ）を探索
+        print("\n[+] 実行可能な解を見つけるための最小モジュール数を探索中...")
+        min_module_point = None
+        for num_modules in range(boundaries["max_modules_needed"] + 1):
+            print(f"  - {num_modules}個のモジュールで確認中... ", end='', flush=True)
+            res = self.solve('MINIMIZE_MAKESPAN', module_quantities={module_name: num_modules}, show_results=False)
+            if res["status"] in (h.cp_model.OPTIMAL, h.cp_model.FEASIBLE):
+                print(f"-> 実行可能な解を発見 (メイクスパン: {int(res['makespan'])})")
+                min_module_point = (num_modules, int(res["makespan"]))
+                break # 最小のモジュール数が見つかったのでループを抜ける
+            else:
+                print("-> 解なし")
+
+        if min_module_point is None:
+            print("\n  - 比較可能なデータ点が2つ未満のため、短縮率は計算できませんでした。")
+            return
+
+        # Step 4: 短縮率を計算・表示 (元の日本語メッセージに戻す)
+        print("\n[+] 分析モデルとの比較用指標を算出...")
+        min_module_num, makespan_at_min_modules = min_module_point
+        max_module_num, makespan_at_max_modules = boundaries["max_modules_needed"], int(boundaries["min_makespan"])
+
+        print(f"  - ベースライン時間 (モジュール{min_module_num}台): {makespan_at_min_modules}")
+        print(f"  - 短縮後の時間 (モジュール{max_module_num}台): {makespan_at_max_modules}")
+
+        if makespan_at_min_modules > 0 and makespan_at_min_modules > makespan_at_max_modules:
+            reduction_rate = (makespan_at_min_modules - makespan_at_max_modules) / makespan_at_min_modules
+            print("─" * 35)
+            print(f"  並列化によるメイクスパン短縮率: {reduction_rate:.4f} ✨")
+            print("─" * 35)
+            print("  (この値は、分析モデルの「並列化ポテンシャルスコア」と比較できます)")
+        else:
+            print("  - 時間短縮が見られなかったため、短縮率は計算しませんでした。")
+
+    def _calculate_tradeoff_points(self, module_name: str, show_results: bool = False) -> list:
+        """
+        モジュール数とメイクスパンのトレードオフ関係の全データポイントを計算します。
+        """
+        boundaries = self._find_analysis_boundaries(module_name, show_results)
+        if not boundaries["success"]:
+            return []
+
+        max_modules_needed = boundaries["max_modules_needed"]
+
+        print(f"\n[3/3] Calculating minimum makespan for each module count (from 0 to {max_modules_needed})...")
+        raw_points = []
+        upper_bound_makespan = None
         for num_modules in range(max_modules_needed + 1):
-            print(f"  - Calculating for {num_modules} modules with makespan limit {upper_bound_makespan} ... ", end='', flush=True)
-            res = self.solve('MINIMIZE_MAKESPAN',
-                               makespan_limit=upper_bound_makespan, # 計算済みのmakespanを上限として設定
-                               module_quantities={module_name: num_modules},
-                               show_results=show_results)
+            print(f"  - Calculating for {num_modules} modules (limit: {upper_bound_makespan})... ", end='', flush=True)
+            res = self.solve('MINIMIZE_MAKESPAN', makespan_limit=upper_bound_makespan, module_quantities={module_name: num_modules}, show_results=show_results)
             if res["status"] in (h.cp_model.OPTIMAL, h.cp_model.FEASIBLE):
                 makespan = int(res["makespan"])
                 raw_points.append((num_modules, makespan))
-
-                # 見つかったmakespanを次の探索の上限として更新する
                 upper_bound_makespan = makespan
-                print(f" -> Achieved makespan: {makespan}. Set as new upper bound.")
+                print(f"-> Makespan: {makespan}")
             else:
-                print(" -> No solution found.")
-                # 解が見つからない場合でも、上限は維持したまま次のモジュール数へ進む
+                print("-> No solution found.")
+
+        return raw_points
+
+    def analyze_tradeoff(self, module_name: str = "arm_m", show_results: bool = False):
+        """
+        Makespanと特定モジュールの必要数のトレードオフ関係を分析し、グラフ化します。
+        """
+        print("\n" + "="*15 + "    Starting Makespan vs. Module Trade-off Analysis " + "="*15)
+
+        raw_points = self._calculate_tradeoff_points(module_name, show_results=show_results)
 
         if not raw_points:
-            print("\n  No feasible solutions found during the analysis. Cannot generate a plot.")
+            print("\n  No feasible solutions found. Cannot generate a plot.")
             return
 
-        # [+] 分析モデルとの比較指標を計算 ============================================
-        print("\n[+] 分析モデルとの比較用指標を算出...")
-        sorted_points = sorted(raw_points, key=lambda x: x[0])
-        if len(sorted_points) >= 2:
-            # 解が見つかった最小と最大のモジュール数とその時の時間を取得
-            min_module_num, makespan_at_min_modules = sorted_points[0]
-            max_module_num, makespan_at_max_modules = sorted_points[-1]
-            print(f"  - ベースライン時間 (モジュール{min_module_num}台): {makespan_at_min_modules}")
-            print(f"  - 短縮後の時間 (モジュール{max_module_num}台): {makespan_at_max_modules}")
-            # ゼロ除算と、時間が増加していないかをチェック
-            if makespan_at_min_modules > 0 and makespan_at_min_modules > makespan_at_max_modules:
-                # 計算式: (ベースライン時間 - 短縮後の時間) / ベースライン時間
-                reduction_rate = (makespan_at_min_modules - makespan_at_max_modules) / makespan_at_min_modules
-
-                print("─" * 35)
-                print(f"  メイクスパン短縮率（最適化結果）: {reduction_rate:.4f} ✨")
-                print("─" * 35)
-                print("  (この値は、分析モデルの「正規化ポテンシャルスコア」と比較できます)")
-            else:
-                print("  - 時間短縮が見られなかったため、短縮率は計算しませんでした。")
-        else:
-            print("  - 比較可能なデータ点が2つ未満のため、短縮率は計算できませんでした。")
-
-        # Step 4: 描画データの準備とグラフ描画
-        print("\n[4/4] Preparing data and plotting the results...")
-
-        # モジュール数が小さい順、次にmakespanが小さい順でソート
-        sorted_raw_points = sorted(raw_points, key=lambda x: (x[0], x[1]))
-        points_for_plot = [(makespan, num_modules) for num_modules, makespan in sorted_raw_points]
+        print("\n[+] Preparing data and plotting the results...")
+        points_for_plot = [(makespan, num_modules) for num_modules, makespan in raw_points]
         self._plot_tradeoff_graph(points_for_plot, module_name)
 
     def _plot_tradeoff_graph(self, points: list, module_name: str):
@@ -283,8 +296,8 @@ class RcpspScheduler:
 def main():
     parser = argparse.ArgumentParser(description="RCPSP Scheduler")
     parser.add_argument("config_file", type=str, help="Path to the input JSON config file.")
-    parser.add_argument("mode", type=str, choices=["makespan", "modules", "tradeoff"],
-                        help="Execution mode: 'makespan', 'modules', or 'tradeoff'.")
+    parser.add_argument("mode", type=str, choices=["makespan", "modules", "tradeoff", "potential"],
+                        help="Execution mode: 'makespan', 'modules', 'tradeoff', or 'potential'.")
     args = parser.parse_args()
 
     try:
@@ -297,18 +310,16 @@ def main():
         print(f"Error: Could not decode JSON from '{args.config_file}'")
         return
 
-    h.calculate_and_print_potential_details(input_data)
-
     scheduler = RcpspScheduler(input_data)
     if args.mode == "makespan":
-        scheduler.solve(optimization_mode='MINIMIZE_MAKESPAN',
-                        show_results=True)
+        scheduler.solve(optimization_mode='MINIMIZE_MAKESPAN', show_results=True)
     elif args.mode == "modules":
-        scheduler.solve(optimization_mode='MINIMIZE_MODULES',
-                        show_results=True,
-                        makespan_limit=input_data.get("makespan_limit"))
+        scheduler.solve(optimization_mode='MINIMIZE_MODULES', show_results=True, makespan_limit=input_data.get("makespan_limit"))
     elif args.mode == "tradeoff":
         scheduler.analyze_tradeoff(module_name="arm_m", show_results=False)
+    elif args.mode == "potential":
+        h.calculate_and_print_potential_details(input_data)
+        scheduler.analyze_potential(module_name="arm_m")
 
 
 if __name__ == "__main__":

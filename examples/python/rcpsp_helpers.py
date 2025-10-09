@@ -1879,7 +1879,7 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
         final_score = 0.0
 
     print("\n==================== 分析サマリー ====================")
-    print(f"正規化ポテンシャルスコア: {final_score:.4f}")
+    print(f"並列化ポテンシャルスコア: {final_score:.4f}")
     if final_score >= 0.7: evaluation = "Excellent (非常に高い) 🌟"
     elif final_score >= 0.4: evaluation = "Good (高い) 👍"
     elif final_score >= 0.1: evaluation = "Moderate (中程度) 🤔"
