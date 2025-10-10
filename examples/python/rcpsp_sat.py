@@ -347,24 +347,49 @@ class RcpspScheduler:
             return
 
         potential_scores, reduction_rates = zip(*results)
+
+        # xとyをnumpy配列に変換
+        x_scores = np.array(potential_scores)
+        y_rates = np.array(reduction_rates)
+
         print("\n[+] Collected Data Points (Potential Score vs. Reduction Rate):")
         for i, (score, rate) in enumerate(results):
             print(f"  - Point {i+1:2d}: Score={score:.4f}, Reduction Rate={rate:.4f}")
-        correlation_coefficient = np.corrcoef(potential_scores, reduction_rates)[0, 1]
 
-        print("\n" + "="*15 + " Correlation Analysis Results " + "="*15)
-        print(f"Pearson Correlation Coefficient: {correlation_coefficient:.4f}")
+        # --- 評価指標の計算 ---
+        metrics = h.calculate_agreement_metrics(x_scores, y_rates)
 
-        # グラフ描画
-        plt.figure(figsize=(10, 6))
-        plt.scatter(potential_scores, reduction_rates, alpha=0.7)
+        print("\n" + "="*20 + " Analysis Metrics " + "="*20)
+        print(f"Lin's Concordance Correlation Coefficient (CCC): {metrics['ccc']:.4f}  <- (相関とy=xのズレを両方考慮するので最も適切な指標。1が完全一致)")
+        print(f"Root Mean Squared Error (RMSE): {metrics['rmse']:.4f}  <- (y=xからの平均的なズレの大きさ。0に近いほど良い)")
+        print(f"Pearson Correlation Coefficient: {metrics['pearson_r']:.4f}  <- (参考: 線形関係の強さ。1/-1に近づくほど正/負の相関)")
+        print("=" * 62)
+
+        # --- グラフ描画の改善 ---
+        plt.figure(figsize=(10, 8))
+        plt.scatter(x_scores, y_rates, alpha=0.7, label='Data Points')
+
+        # y=x の理想線を追加
+        min_val = min(plt.xlim()[0], plt.ylim()[0])
+        max_val = max(plt.xlim()[1], plt.ylim()[1])
+        plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal Agreement (y=x)')
+
         plt.title('Potential Score vs. Makespan Reduction Rate', fontsize=16)
-        plt.xlabel('Parallelization Potential Score (from Analysis Model)', fontsize=12)
-        plt.ylabel('Makespan Reduction Rate (from Scheduler)', fontsize=12)
+        plt.xlabel('Parallelization Potential Score (Analysis Model)', fontsize=12)
+        plt.ylabel('Makespan Reduction Rate (Scheduler Result)', fontsize=12)
         plt.grid(True, linestyle='--', alpha=0.6)
-        plt.text(0.05, 0.95, f'Correlation: {correlation_coefficient:.4f}',
-                 transform=plt.gca().transAxes, fontsize=12, verticalalignment='top',
-                 bbox=dict(boxstyle='round,pad=0.5', facecolor='wheat', alpha=0.5))
+        plt.axis('equal') # 縦横のスケールを合わせる
+        plt.legend()
+
+        # グラフに指標を表示
+        metrics_text = (
+            f"CCC: {metrics['ccc']:.3f}\n"
+            f"RMSE: {metrics['rmse']:.3f}\n"
+            f"Pearson's r: {metrics['pearson_r']:.3f}"
+        )
+        plt.text(0.05, 0.95, metrics_text, transform=plt.gca().transAxes, fontsize=12,
+                 verticalalignment='top', bbox=dict(boxstyle='round,pad=0.5', facecolor='wheat', alpha=0.7))
+
         plt.show()
 
 # =============================================================================

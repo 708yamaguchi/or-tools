@@ -1710,6 +1710,44 @@ def setup_rcpsp_problem(input_data: dict, show_debug_prints=False) -> (rcpsp_pb2
     return problem, mode_to_resources_map, resolved_task_modes, recipe_to_caps_map
 
 
+def calculate_agreement_metrics(x, y):
+    """
+    2つのデータセットの一致度を評価する複数の指標を計算します。
+
+    Args:
+        x (np.array): 予測値や理論値 (Potential Score)
+        y (np.array): 実測値 (Reduction Rate)
+
+    Returns:
+        dict: 計算された評価指標を含む辞書
+    """
+    metrics = {}
+
+    # 1. ピアソン相関係数 (Pearson Correlation Coefficient)
+    #   - 2つの変数の線形関係の強さを示す。-1から1の範囲。
+    #   - y=x であるかは問わない。
+    metrics['pearson_r'] = np.corrcoef(x, y)[0, 1]
+
+    # 2. 平均二乗誤差平方根 (Root Mean Squared Error, RMSE)
+    #   - y=x の直線からの平均的な誤差の大きさを示す。0に近いほど良い。
+    #   - 外れ値（大きな誤差）の影響を受けやすい。
+    metrics['rmse'] = np.sqrt(np.mean((y - x)**2))
+
+    # 3. Linの一致相関係数 (Concordance Correlation Coefficient, CCC)
+    #   - 最も推奨される指標。データが y=x の直線にどれだけ一致しているかを示す。
+    #   - 相関の強さ（精度）と、y=xからのズレ（正確さ）の両方を考慮する。-1から1の範囲。1が完全一致。
+    mean_x, mean_y = np.mean(x), np.mean(y)
+    var_x, var_y = np.var(x, ddof=1), np.var(y, ddof=1)  # サンプル分散
+    cov = np.cov(x, y, ddof=1)[0, 1]
+    metrics['ccc'] = (2 * cov) / (var_x + var_y + (mean_x - mean_y)**2)
+
+    # --- その他の指標候補 (コメント) ---
+    # Mean Absolute Error (MAE): 平均絶対誤差。RMSEと似ているが、外れ値の影響を受けにくい。
+    # R-squared (決定係数): xによってyの分散の何%を説明できるかを示す。ピアソン相関係数の2乗に等しく、同様の限界を持つ。
+
+    return metrics
+
+
 def calculate_potential_score(data: dict, use_physical_arm_limit: bool = False, verbose: bool = True) -> float:
     """タスク群の並列化ポテンシャルを分析し、その詳細な計算過程を出力します。
 
