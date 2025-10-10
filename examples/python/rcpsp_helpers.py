@@ -1860,6 +1860,7 @@ def calculate_potential_score(data: dict, use_physical_arm_limit: bool = False, 
         print("\n[ステップ2: 階層ごとの最適モード判定とポテンシャル計算]")
 
     for i, layer_tasks in enumerate(layers):
+        layer_potential = 0
         if verbose:
             print(f"\n--- <階層 {i} の分析> ---")
         # 最初に階層内の全タスクを分析し、利益を計算・表示

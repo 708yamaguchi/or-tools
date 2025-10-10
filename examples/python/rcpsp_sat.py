@@ -27,6 +27,7 @@ import json
 import copy
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
+import numpy as np
 
 import rcpsp_helpers as h
 
@@ -151,48 +152,57 @@ class RcpspScheduler:
             "max_modules_needed": max_modules_needed
         }
 
-    def analyze_potential(self, module_name: str = "arm_m"):
-        """
-        並列化によるメイクスパン短縮率を計算します。始点と終点の2点のみを効率的に計算します。
-        """
-        print("\n" + "="*5 + " 並列化によるメイクスパン短縮率をスケジューリングに基づいて計算 " + "="*5)
+    def analyze_potential(self, module_name: str = "arm_m", show_results: bool = True) -> float:
+        """並列化によるメイクスパン短縮率を計算し、その値を返します。"""
+        if show_results:
+            print("\n" + "="*5 + " 並列化によるメイクスパン短縮率をスケジューリングに基づいて計算 " + "="*5)
 
-        # Step 1-2: 境界条件（主に終点データ）を取得
         boundaries = self._find_analysis_boundaries(module_name, show_results=False)
         if not boundaries["success"]:
-            return
+            if show_results:
+                print("分析の境界条件を見つけられなかったため、短縮率を計算できません。")
+            return None
 
-        # Step 3: 解が見つかる最小のモジュール数（始点データ）を探索
-        print("\n[+] 実行可能な解を見つけるための最小モジュール数を探索中...")
+        # 解が見つかる最小のモジュール数を探索
+        if show_results:
+            print("\n[+] 実行可能な解を見つけるための最小モジュール数を探索中...")
         min_module_point = None
         for num_modules in range(boundaries["max_modules_needed"] + 1):
-            print(f"  - {num_modules}個のモジュールで確認中... ", end='', flush=True)
+            if show_results:
+                print(f"  - {num_modules}個のモジュールで確認中... ", end='', flush=True)
             res = self.solve('MINIMIZE_MAKESPAN', module_quantities={module_name: num_modules}, show_results=False)
             if res["status"] in (h.cp_model.OPTIMAL, h.cp_model.FEASIBLE):
-                print(f"-> 実行可能な解を発見 (メイクスパン: {int(res['makespan'])})")
+                if show_results:
+                    print(f"-> 実行可能な解を発見 (メイクスパン: {int(res['makespan'])})")
                 min_module_point = (num_modules, int(res["makespan"]))
-                break # 最小のモジュール数が見つかったのでループを抜ける
-            else:
+                break
+            elif show_results:
                 print("-> 解なし")
 
         if min_module_point is None:
-            print("\n  - 比較可能なデータ点が2つ未満のため、短縮率は計算できませんでした。")
-            return
+            if show_results:
+                print("\n  - 比較可能なデータ点が2つ未満のため、短縮率は計算できませんでした。")
+            return None
 
-        # Step 4: 短縮率を計算・表示 (元の日本語メッセージに戻す)
-        print("\n[+] 分析モデルとの比較用指標を算出...")
+        # 短縮率を計算
         min_module_num, makespan_at_min_modules = min_module_point
         max_module_num, makespan_at_max_modules = boundaries["max_modules_needed"], int(boundaries["min_makespan"])
 
-        print(f"  - ベースライン時間 (モジュール{min_module_num}台): {makespan_at_min_modules}")
-        print(f"  - 短縮後の時間 (モジュール{max_module_num}台): {makespan_at_max_modules}")
-
+        reduction_rate = 0.0
         if makespan_at_min_modules > 0 and makespan_at_min_modules > makespan_at_max_modules:
             reduction_rate = (makespan_at_min_modules - makespan_at_max_modules) / makespan_at_min_modules
-            print(f"\n並列化によるメイクスパン短縮率: {reduction_rate:.4f} ✨")
-            print("(この値は、分析モデルの「並列化ポテンシャルスコア」と比較できます)")
-        else:
-            print("  - 時間短縮が見られなかったため、短縮率は計算しませんでした。")
+
+        if show_results:
+            print("\n[+] 分析モデルとの比較用指標を算出...")
+            print(f"  - ベースライン時間 (モジュール{min_module_num}台): {makespan_at_min_modules}")
+            print(f"  - 短縮後の時間 (モジュール{max_module_num}台): {makespan_at_max_modules}")
+            if reduction_rate > 0:
+                print(f"\n並列化によるメイクスパン短縮率: {reduction_rate:.4f} ✨")
+                print("(この値は、分析モデルの「並列化ポテンシャルスコア」と比較できます)")
+            else:
+                print("  - 時間短縮が見られなかったため、短縮率は計算しませんでした。")
+
+        return reduction_rate
 
     def _calculate_tradeoff_points(self, module_name: str, show_results: bool = False) -> list:
         """
@@ -287,37 +297,202 @@ class RcpspScheduler:
         plt.tight_layout()
         plt.show()
 
+    def analyze_correlation(self, module_name: str, arm_counts: list, handling_times: list):
+        """
+        アーム台数と脱着時間を変更しながら、ポテンシャルスコアとMakespan短縮率の相関を分析します。
+        """
+        print(f"\n{'='*10} Starting Correlation Analysis {'='*10}")
+        print(f"Target module: '{module_name}'")
+        print(f"Arm counts to test: {arm_counts}")
+        print(f"Handling times to test: {handling_times}")
+        print("-" * 50)
+
+        results = []
+        total_iterations = len(arm_counts) * len(handling_times)
+        current_iteration = 0
+
+        for count in arm_counts:
+            for time in handling_times:
+                current_iteration += 1
+                print(f"[{current_iteration}/{total_iterations}] Analyzing with {count} arms and handling time {time}...")
+
+                # 毎回ベースデータから新しい設定を作成
+                current_input_data = copy.deepcopy(self.base_input_data)
+                current_input_data["module_handling_time"] = time
+                module_found = False
+                for module in current_input_data.get("resources", {}).get("module", []):
+                    if module.get("name") == module_name:
+                        module["quantity"] = count
+                        module_found = True
+                        break
+                if not module_found:
+                    print(f"  Error: Module '{module_name}' not found in config. Skipping.")
+                    continue
+
+                # 1. ポテンシャルスコアを計算
+                potential_score = h.calculate_potential_score(current_input_data, use_physical_arm_limit=True, verbose=False)
+
+                # 2. Makespan短縮率を計算 (新しい設定で一時的なスケジューラを作成)
+                temp_scheduler = RcpspScheduler(current_input_data)
+                reduction_rate = temp_scheduler.analyze_potential(module_name=module_name, show_results=False)
+
+                if reduction_rate is not None:
+                    results.append((potential_score, reduction_rate))
+                    print(f"  -> Potential Score: {potential_score:.4f}, Reduction Rate: {reduction_rate:.4f}")
+                else:
+                    print("  -> Could not calculate reduction rate. Skipping point.")
+
+        if len(results) < 2:
+            print("\nNot enough data points collected (< 2). Cannot generate plot or calculate correlation.")
+            return
+
+        potential_scores, reduction_rates = zip(*results)
+        print("\n[+] Collected Data Points (Potential Score vs. Reduction Rate):")
+        for i, (score, rate) in enumerate(results):
+            print(f"  - Point {i+1:2d}: Score={score:.4f}, Reduction Rate={rate:.4f}")
+        correlation_coefficient = np.corrcoef(potential_scores, reduction_rates)[0, 1]
+
+        print("\n" + "="*15 + " Correlation Analysis Results " + "="*15)
+        print(f"Pearson Correlation Coefficient: {correlation_coefficient:.4f}")
+
+        # グラフ描画
+        plt.figure(figsize=(10, 6))
+        plt.scatter(potential_scores, reduction_rates, alpha=0.7)
+        plt.title('Potential Score vs. Makespan Reduction Rate', fontsize=16)
+        plt.xlabel('Parallelization Potential Score (from Analysis Model)', fontsize=12)
+        plt.ylabel('Makespan Reduction Rate (from Scheduler)', fontsize=12)
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.text(0.05, 0.95, f'Correlation: {correlation_coefficient:.4f}',
+                 transform=plt.gca().transAxes, fontsize=12, verticalalignment='top',
+                 bbox=dict(boxstyle='round,pad=0.5', facecolor='wheat', alpha=0.5))
+        plt.show()
+
 # =============================================================================
 # Main Execution Block
 # =============================================================================
+def setup_arg_parser():
+    """コマンドライン引数を定義し、パーサーオブジェクトを返します。"""
+    parser = argparse.ArgumentParser(
+        description="RCPSP Scheduler",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
 
-def main():
-    parser = argparse.ArgumentParser(description="RCPSP Scheduler")
-    parser.add_argument("config_file", type=str, help="Path to the input JSON config file.")
-    parser.add_argument("mode", type=str, choices=["makespan", "modules", "tradeoff", "potential"],
-                        help="Execution mode: 'makespan', 'modules', 'tradeoff', or 'potential'.")
-    args = parser.parse_args()
+    # --- グループ1: 基本引数 (全モード共通) ---
+    base_group = parser.add_argument_group('Base Arguments (common to all modes)')
+    base_group.add_argument("config_file", type=str, help="Path to the input JSON config file.")
+    base_group.add_argument("mode", type=str, choices=["makespan", "modules", "tradeoff", "potential", "correlation"],
+                            help="""Execution mode:
+- makespan: Minimize the total project time (makespan).
+- modules: Minimize the number of modules for a given makespan.
+- tradeoff: Analyze the trade-off between makespan and modules.
+- potential: Compare the analysis model's potential score with the scheduler's result.
+- correlation: Analyze the correlation between potential score and makespan reduction rate.""")
+    base_group.add_argument("--module-name", type=str, default="arm_m",
+                            help="Specify the target module name (default: 'arm_m').")
 
+    # --- グループ2: 上書き用引数 (correlationモード以外) ---
+    override_group = parser.add_argument_group('Override Options (for all modes EXCEPT correlation)')
+    override_group.add_argument("--arm-count", type=int,
+                                help="Override the number of arm modules from the config file.")
+    override_group.add_argument("--handling-time", type=int,
+                                help="Override the module handling time from the config file.")
+
+    # --- グループ3: Correlationモード専用引数 ---
+    correlation_group = parser.add_argument_group('Correlation Mode Options (correlation mode ONLY)')
+    correlation_group.add_argument("--arm-counts", type=int, nargs='+',
+                                   help="List of arm counts to iterate over.")
+    correlation_group.add_argument("--handling-times", type=int, nargs='+',
+                                   help="List of module handling times to iterate over.")
+    
+    return parser
+
+
+def load_and_prepare_config(args):
+    """設定ファイルを読み込み、コマンドライン引数で設定を上書きします。"""
     try:
         with open(args.config_file, 'r') as f:
-            input_data = json.load(f)
+            config_data = json.load(f)
     except FileNotFoundError:
         print(f"Error: Configuration file not found at '{args.config_file}'")
-        return
+        return None
     except json.JSONDecodeError:
         print(f"Error: Could not decode JSON from '{args.config_file}'")
-        return
+        return None
 
-    scheduler = RcpspScheduler(input_data)
+    # モジュール名を取得（引数がなければデフォルト値）
+    module_name = args.module_name if args.module_name else "arm_m"
+
+    # アーム台数の上書き
+    if args.arm_count is not None:
+        print(f"INFO: Overriding arm count with command-line value: {args.arm_count}")
+        # 'resources'や'module'キーが存在しない場合も考慮
+        module_list = config_data.setdefault('resources', {}).setdefault('module', [])
+        found = False
+        for mod in module_list:
+            if mod.get("name") == module_name:
+                mod['quantity'] = args.arm_count
+                found = True
+                break
+        if not found:
+            # モジュール定義がない場合は追加する
+            module_list.append({"name": module_name, "quantity": args.arm_count, "capabilities": {"arm": 1}})
+
+    # 脱着時間の上書き
+    if args.handling_time is not None:
+        print(f"INFO: Overriding handling time with command-line value: {args.handling_time}")
+        config_data['module_handling_time'] = args.handling_time
+
+    return config_data, module_name
+
+
+def execute_mode(scheduler, args, module_name, input_data):
+    """解析された引数に基づいて、指定されたモードを実行します。"""
     if args.mode == "makespan":
         scheduler.solve(optimization_mode='MINIMIZE_MAKESPAN', show_results=True)
     elif args.mode == "modules":
         scheduler.solve(optimization_mode='MINIMIZE_MODULES', show_results=True, makespan_limit=input_data.get("makespan_limit"))
     elif args.mode == "tradeoff":
-        scheduler.analyze_tradeoff(module_name="arm_m", show_results=False)
+        scheduler.analyze_tradeoff(module_name=module_name, show_results=False)
     elif args.mode == "potential":
         h.calculate_potential_score(input_data, use_physical_arm_limit=True, verbose=True)
-        scheduler.analyze_potential(module_name="arm_m")
+        scheduler.analyze_potential(module_name=module_name, show_results=True)
+    elif args.mode == "correlation":
+        if not args.arm_counts or not args.handling_times:
+            parser.error("--arm-counts and --handling-times are REQUIRED for 'correlation' mode.")
+        scheduler.analyze_correlation(
+            module_name=module_name,
+            arm_counts=args.arm_counts,
+            handling_times=args.handling_times
+        )
+
+
+def main():
+    """プログラムのエントリーポイント。"""
+    # 1. 引数の解析
+    parser = setup_arg_parser()
+    args = parser.parse_args()
+
+    # 2. 引数の組み合わせを検証
+    is_correlation_mode = (args.mode == 'correlation')
+    # 'correlation'モードでのみ使える引数が、他のモードで使われていないかチェック
+    if not is_correlation_mode and (args.arm_counts is not None or args.handling_times is not None):
+        parser.error("--arm-counts and --handling-times can only be used with 'correlation' mode.")
+    # 'correlation'モード以外で使える引数が、'correlation'モードで使われていないかチェック
+    if is_correlation_mode and (args.arm_count is not None or args.handling_time is not None):
+        parser.error("--arm-count and --handling-time cannot be used with 'correlation' mode. Use --arm-counts and --handling-times instead.")
+    # 'correlation'モードで必須の引数が存在するかチェック
+    if is_correlation_mode and (args.arm_counts is None or args.handling_times is None):
+        parser.error("--arm-counts and --handling-times are REQUIRED for 'correlation' mode.")
+
+    # 3. 設定の読み込みと準備
+    result = load_and_prepare_config(args)
+    if result is None:
+        return  # 設定ファイルの読み込みに失敗
+    input_data, module_name = result
+
+    # 4. モードの実行
+    scheduler = RcpspScheduler(input_data)
+    execute_mode(scheduler, args, module_name, input_data)
 
 
 if __name__ == "__main__":
