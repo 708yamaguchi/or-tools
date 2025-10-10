@@ -1914,27 +1914,27 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
            boundary_robot_only = T / 2.0
            boundary_cooperative = T / (k - 1) if k > 1 else float('inf')
 
-           if d >= boundary_robot_only or k <= 1:
+           if d >= boundary_robot_only or k-1 == 0:
                # === 領域3: ロボット単独モード ===
-               print(f"  -> 最適モード: ロボット単独 (d >= T/2 = {boundary_robot_only:.2f} または k <= 1)")
-           
+               print(f"  -> 最適モード: ロボット単独 (d >= T/2 = {boundary_robot_only:.2f} または k == 1)")
            elif d < boundary_cooperative:
                # === 領域1: 協働作業モード ===
                # ロボットが1タスク担当するため、アームは k-1 台使用
                num_arms_used = k - 1
-               setup_cost = 2 * d * num_arms_used
+               setup_cost = 2 * d * math.floor(N * num_arms_used / k)
                estimated_makespan = estimated_task_time + setup_cost
                potential = total_duration_N - estimated_makespan
                layer_potential = max(0, potential)
-
-               print(f"  -> 最適モード: 協働作業 (d < T/(k-1) = {boundary_cooperative:.2f})")
+               if k-1 == 1:
+                   print(f"  -> 最適モード: 協働作業 (k-1=1 かつ d < T/2 = {boundary_robot_only:.2f})")
+               else:
+                   print(f"  -> 最適モード: 協働作業 (d < T/(k-1) = {boundary_cooperative:.2f})")
                print(f"  -> ポテンシャル = (総時間 {total_duration_N}) - (予測時間 {estimated_task_time:.2f} + 設置コスト {setup_cost:.2f}) = {layer_potential:.2f}")
-           
            else:
                # === 領域2: アーム主導モード ===
                # ロボットは管理に専念するため、アームは k 台使用 (ただし物理上限あり)
                num_arms_used = min(k, num_available_arms)
-               setup_cost = 2 * d * num_arms_used
+               setup_cost = 2 * d * math.floor(N * num_arms_used / k)
                estimated_makespan = estimated_task_time + setup_cost
                potential = total_duration_N - estimated_makespan
                layer_potential = max(0, potential)
