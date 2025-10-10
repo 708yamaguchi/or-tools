@@ -155,7 +155,7 @@ class RcpspScheduler:
         """
         並列化によるメイクスパン短縮率を計算します。始点と終点の2点のみを効率的に計算します。
         """
-        print("\n" + "="*15 + "    並列化ポテンシャル分析を開始 " + "="*15)
+        print("\n" + "="*5 + " 並列化によるメイクスパン短縮率をスケジューリングに基づいて計算 " + "="*5)
 
         # Step 1-2: 境界条件（主に終点データ）を取得
         boundaries = self._find_analysis_boundaries(module_name, show_results=False)
@@ -189,10 +189,8 @@ class RcpspScheduler:
 
         if makespan_at_min_modules > 0 and makespan_at_min_modules > makespan_at_max_modules:
             reduction_rate = (makespan_at_min_modules - makespan_at_max_modules) / makespan_at_min_modules
-            print("─" * 35)
-            print(f"  並列化によるメイクスパン短縮率: {reduction_rate:.4f} ✨")
-            print("─" * 35)
-            print("  (この値は、分析モデルの「並列化ポテンシャルスコア」と比較できます)")
+            print(f"\n並列化によるメイクスパン短縮率: {reduction_rate:.4f} ✨")
+            print("(この値は、分析モデルの「並列化ポテンシャルスコア」と比較できます)")
         else:
             print("  - 時間短縮が見られなかったため、短縮率は計算しませんでした。")
 
@@ -318,7 +316,7 @@ def main():
     elif args.mode == "tradeoff":
         scheduler.analyze_tradeoff(module_name="arm_m", show_results=False)
     elif args.mode == "potential":
-        h.calculate_and_print_potential_details(input_data)
+        h.calculate_and_print_potential_details(input_data, use_physical_arm_limit=True)
         scheduler.analyze_potential(module_name="arm_m")
 
 
