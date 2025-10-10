@@ -1710,7 +1710,7 @@ def setup_rcpsp_problem(input_data: dict, show_debug_prints=False) -> (rcpsp_pb2
     return problem, mode_to_resources_map, resolved_task_modes, recipe_to_caps_map
 
 
-def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bool = False):
+def calculate_potential_score(data: dict, use_physical_arm_limit: bool = False, verbose: bool = True) -> float:
     """タスク群の並列化ポテンシャルを分析し、その詳細な計算過程を出力します。
 
     脱着式アームを持つ単一ロボットシステムを対象に、与えられたタスク群が持つ
@@ -1801,13 +1801,15 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
             Trueの場合、利用可能なアームの物理的な数を並列化上限に含めます。
             デフォルトは False です。
     """
-    print("--- 分析モデル 詳細計算レポート ---")
+    if verbose:
+        print("--- 分析モデル 詳細計算レポート ---")
 
     # 1. 初期設定
     d = data.get("module_handling_time")
     tasks_list = data.get("tasks", [])
     if not d or not tasks_list:
-        print("エラー: 'module_handling_time' または 'tasks' が見つかりません。")
+        if verbose:
+            print("エラー: 'module_handling_time' または 'tasks' が見つかりません。")
         return
     try:
         num_available_arms = data["resources"]["module"][0]["quantity"]
@@ -1816,7 +1818,8 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
     overhead = 2 * d
 
     # 2. 依存関係グラフの構築と階層化 (トポロジカルソート)
-    print("\n[ステップ1: タスク依存関係の階層化]")
+    if verbose:
+        print("\n[ステップ1: タスク依存関係の階層化]")
     task_map = {task['name']: task for task in tasks_list}
     in_degree = {name: 0 for name in task_map}
     adj_list = {name: [] for name in task_map}
@@ -1842,22 +1845,23 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
         queue = next_queue
 
     if processed_count != len(task_map):
-        print("\nエラー: タスク間に循環参照が存在するため、解析を中断しました。")
-        return
+        if verbose:
+            print("\nエラー: タスク間に循環参照が存在するため、解析を中断しました。")
+        return 0.0
 
-    for i, layer in enumerate(layers):
-        task_names = [t['name'] for t in layer]
-        print(f"・階層 {i}: {', '.join(task_names)}")
+    if verbose:
+        for i, layer in enumerate(layers):
+            print(f"・階層 {i}: {[t['name'] for t in layer]}")
 
     # 3. 階層ごとのポテンシャル計算と集計
-    print("\n[ステップ2: 階層ごとの最適モード判定とポテンシャル計算]")
     total_strategic_potential = 0
     project_total_duration = sum(t['modes'][0]['duration'] for t in tasks_list)
+    if verbose:
+        print("\n[ステップ2: 階層ごとの最適モード判定とポテンシャル計算]")
 
     for i, layer_tasks in enumerate(layers):
-        print(f"\n--- <階層 {i} の分析> ---")
-        layer_potential = 0
-
+        if verbose:
+            print(f"\n--- <階層 {i} の分析> ---")
         # 最初に階層内の全タスクを分析し、利益を計算・表示
         arm_oriented_tasks = []
         for task in layer_tasks:
@@ -1874,16 +1878,19 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
 
         # --- 【ベースケース】 N=1 以下の場合の処理 ---
         if N <= 1:
-            print(f"\n  パラメータ: N={N}")
-            print("  -> 最適モード: ロボット単独 (並列化の対象となるタスクが1つ以下)")
+            if verbose:
+                print(f"\n  パラメータ: N={N}")
+                print("  -> 最適モード: ロボット単独 (並列化の対象となるタスクが1つ以下)")
         # --- 【一般ケース】 N>=2 の場合の処理 ---
         else:
            T = sum(t["duration"] for t in arm_oriented_tasks) / N
-           print(f"\n  パラメータ: N={N}, T={T:.2f}, d={d}")
+           if verbose:
+               print(f"\n  パラメータ: N={N}, T={T:.2f}, d={d}")
 
            # N_maxとkを事前に計算
            n_max = (T / (d if d > 0 else 1e-9)) + 1
-           print(f"  ・有効並列化上限N_max = (平均時間 {T:.2f}) / (移動時間 {d}) + 1 = {n_max:.2f}")
+           if verbose:
+               print(f"  ・有効並列化上限N_max = (平均時間 {T:.2f}) / (移動時間 {d}) + 1 = {n_max:.2f}")
 
            k_limit_n_max = math.floor(n_max)
            k = int(min(N, k_limit_n_max))
@@ -1891,9 +1898,11 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
                # 物理アーム数の上限を適用
                k_before_limit = k
                k = min(k, num_available_arms + 1) # ロボットも作業するため+1
-               print(f"  ・戦略的並列化数k     = min(タスク数 {N}, floor(N_max) {k_limit_n_max}, 物理リソース数 {num_available_arms + 1}) = {k}")
+               if verbose:
+                   print(f"  ・戦略的並列化数k     = min(タスク数 {N}, floor(N_max) {k_limit_n_max}, 物理リソース数 {num_available_arms + 1}) = {k}")
            else:
-               print(f"  ・戦略的並列化数k     = min(タスク数 {N}, floor(N_max) {k_limit_n_max}) = {k}")
+               if verbose:
+                   print(f"  ・戦略的並列化数k     = min(タスク数 {N}, floor(N_max) {k_limit_n_max}) = {k}")
 
            # この階層の全アーム向きタスクの総時間
            total_duration_N = sum(t['duration'] for t in arm_oriented_tasks)
@@ -1903,20 +1912,23 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
                # ケース1: タスク数がリソース数を超える場合 (バッチ処理が発生)
                # 平均負荷を完了時間と見積もる
                estimated_task_time = total_duration_N / k
-               print(f"  ・ボトルネック予測: 平均負荷 (タスク数 > リソース数) = {total_duration_N}/{k} = {estimated_task_time:.2f}")
+               if verbose:
+                   print(f"  ・ボトルネック予測: 平均負荷 (タスク数 > リソース数) = {total_duration_N}/{k} = {estimated_task_time:.2f}")
            else:
                # ケース2: タスク数がリソース数以下の場合 (1バッチで完了)
                # 最長タスクを完了時間と見積もる
                arm_oriented_tasks.sort(key=lambda x: x["duration"], reverse=True)
                estimated_task_time = arm_oriented_tasks[0]['duration'] if arm_oriented_tasks else 0
-               print(f"  ・ボトルネック予測: 最長タスク (タスク数 <= リソース数) = {estimated_task_time:.2f}")
+               if verbose:
+                   print(f"  ・ボトルネック予測: 最長タスク (タスク数 <= リソース数) = {estimated_task_time:.2f}")
 
            boundary_robot_only = T / 2.0
            boundary_cooperative = T / (k - 1) if k > 1 else float('inf')
 
            if d >= boundary_robot_only or k-1 == 0:
                # === 領域3: ロボット単独モード ===
-               print(f"  -> 最適モード: ロボット単独 (d >= T/2 = {boundary_robot_only:.2f} または k == 1)")
+               if verbose:
+                   print(f"  -> 最適モード: ロボット単独 (d >= T/2 = {boundary_robot_only:.2f} または k == 1)")
            elif d < boundary_cooperative:
                # === 領域1: 協働作業モード ===
                # ロボットが1タスク担当するため、アームは k-1 台使用
@@ -1925,11 +1937,12 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
                estimated_makespan = estimated_task_time + setup_cost
                potential = total_duration_N - estimated_makespan
                layer_potential = max(0, potential)
-               if k-1 == 1:
-                   print(f"  -> 最適モード: 協働作業 (k-1=1 かつ d < T/2 = {boundary_robot_only:.2f})")
-               else:
-                   print(f"  -> 最適モード: 協働作業 (d < T/(k-1) = {boundary_cooperative:.2f})")
-               print(f"  -> ポテンシャル = (総時間 {total_duration_N}) - (予測時間 {estimated_task_time:.2f} + 設置コスト {setup_cost:.2f}) = {layer_potential:.2f}")
+               if verbose:
+                   if k-1 == 1:
+                       print(f"  -> 最適モード: 協働作業 (k-1=1 かつ d < T/2 = {boundary_robot_only:.2f})")
+                   else:
+                       print(f"  -> 最適モード: 協働作業 (d < T/(k-1) = {boundary_cooperative:.2f})")
+                   print(f"  -> ポテンシャル = (総時間 {total_duration_N}) - (予測時間 {estimated_task_time:.2f} + 設置コスト {setup_cost:.2f}) = {layer_potential:.2f}")
            else:
                # === 領域2: アーム主導モード ===
                # ロボットは管理に専念するため、アームは k 台使用 (ただし物理上限あり)
@@ -1938,30 +1951,31 @@ def calculate_and_print_potential_details(data: dict, use_physical_arm_limit: bo
                estimated_makespan = estimated_task_time + setup_cost
                potential = total_duration_N - estimated_makespan
                layer_potential = max(0, potential)
-
-               print(f"  -> 最適モード: アーム主導 (T/(k-1) <= d < T/2)")
-               print(f"  -> ポテンシャル = (総時間 {total_duration_N}) - (予測時間 {estimated_task_time:.2f} + 設置コスト {setup_cost:.2f}) = {layer_potential:.2f}")
-
-        if layer_potential == 0 and N > 1:
+               if verbose:
+                   print(f"  -> 最適モード: アーム主導 (T/(k-1) <= d < T/2)")
+                   print(f"  -> ポテンシャル = (総時間 {total_duration_N}) - (予測時間 {estimated_task_time:.2f} + 設置コスト {setup_cost:.2f}) = {layer_potential:.2f}")
+        if layer_potential == 0 and N > 1 and verbose:
              print("  -> 並列化のメリットがありません。ポテンシャル: 0")
 
         total_strategic_potential += layer_potential
 
     # 4. 値の計算
-    print("\n[ステップ3: 分析モデルによるサマリー]")
-    print(f"・プロジェクト全体の総作業時間: {project_total_duration}")
-    print(f"・並列化による利益の総量（ポテンシャル合計）: {total_strategic_potential:.2f}")
-
     if project_total_duration > 0:
         final_score = total_strategic_potential / project_total_duration
     else:
         final_score = 0.0
 
-    print(f"\n並列化ポテンシャルスコア: {final_score:.4f}")
-    if final_score >= 0.7: evaluation = "Excellent (非常に高い) 🌟"
-    elif final_score >= 0.4: evaluation = "Good (高い) 👍"
-    elif final_score >= 0.1: evaluation = "Moderate (中程度) 🤔"
-    elif final_score > 0: evaluation = "Poor (低い) 👎"
-    else: evaluation = "Unsuitable (不適合) ❌"
-    print(f"評価: {evaluation}")
-    print("-------------------- 分析レポート終了 --------------------")
+    if verbose:
+        print("\n[ステップ3: 分析モデルによるサマリー]")
+        print(f"・プロジェクト全体の総作業時間: {project_total_duration}")
+        print(f"・並列化による利益の総量（ポテンシャル合計）: {total_strategic_potential:.2f}")
+        print(f"\n並列化ポテンシャルスコア: {final_score:.4f}")
+        if final_score >= 0.7: evaluation = "Excellent (非常に高い) 🌟"
+        elif final_score >= 0.4: evaluation = "Good (高い) 👍"
+        elif final_score >= 0.1: evaluation = "Moderate (中程度) 🤔"
+        elif final_score > 0: evaluation = "Poor (低い) 👎"
+        else: evaluation = "Unsuitable (不適合) ❌"
+        print(f"評価: {evaluation}")
+        print("-------------------- 分析レポート終了 --------------------")
+
+    return final_score

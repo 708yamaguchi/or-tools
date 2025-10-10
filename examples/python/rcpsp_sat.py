@@ -316,7 +316,7 @@ def main():
     elif args.mode == "tradeoff":
         scheduler.analyze_tradeoff(module_name="arm_m", show_results=False)
     elif args.mode == "potential":
-        h.calculate_and_print_potential_details(input_data, use_physical_arm_limit=True)
+        h.calculate_potential_score(input_data, use_physical_arm_limit=True, verbose=True)
         scheduler.analyze_potential(module_name="arm_m")
 
 
