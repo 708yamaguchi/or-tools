@@ -23,13 +23,18 @@ Data use in flags:
 
 import argparse
 import json
-
 import copy
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import numpy as np
 
 import rcpsp_helpers as h
+
+# =============================================================================
+# MODIFICATION: Import Fraction for precise fraction arithmetic and math for gcd
+# =============================================================================
+from fractions import Fraction
+import math
 
 
 class RcpspScheduler:
@@ -42,11 +47,77 @@ class RcpspScheduler:
         スケジューラのインスタンスを初期化します。
         """
         self.base_input_data = input_data
+        
+        # =============================================================================
+        # MODIFICATION: Calculate the time scaling factor upon initialization
+        # =============================================================================
+        self.time_scaling_factor = self._calculate_time_scaling_factor(self.base_input_data)
 
         # ヘルパー関数を呼び出して、IDと名前のマッピングや表示用のカラーマップを作成
         self.task_id_to_name, self.mode_to_name = h.create_name_mappings(self.base_input_data)
         self.renewable_id_to_name, self.reservoir_id_to_name = h.create_resource_name_mappings(self.base_input_data)
         self.resource_color_map, self.capability_color_map = h.create_color_maps(self.base_input_data)
+
+    def _calculate_time_scaling_factor(self, data: dict) -> float:
+        """
+        入力データ内のすべての時間関連の値を調査し、それらをすべて整数に変換するための
+        最適な（最小の）スケーリング倍率を計算します。
+
+        この倍率は、小数を整数にするための倍率（分母の最小公倍数）と、
+        全体を縮小するための倍率（分子の最大公約数の逆数）を組み合わせて決定されます。
+
+        例:
+        - [10, 20, 50] -> GCDが10なので、0.1倍を返す
+        - [5.5, 11] -> 分母のLCMが2なので、2倍を返す
+        - [7.5, 12.5, 5] -> 実質的なGCDが2.5なので、1/2.5 = 0.4倍を返す
+        """
+
+        def lcm(a, b):
+            """2つの整数の最小公倍数を計算する"""
+            return abs(a * b) // math.gcd(a, b) if a != 0 and b != 0 else 0
+
+        time_values = []
+        # 辞書からNoneでない時間関連の値をすべて集める
+        if data.get("module_handling_time") is not None:
+            time_values.append(data["module_handling_time"])
+
+        for task in data.get("tasks", []):
+            for mode in task.get("modes", []):
+                if mode.get("duration") is not None:
+                    time_values.append(mode["duration"])
+
+        # 時間の値がなければ、スケーリングは不要
+        if not time_values:
+            return 1.0
+
+        # すべての値をFraction（分数）オブジェクトに変換
+        fractions = [Fraction(str(v)).limit_denominator() for v in time_values]
+
+        # 1. すべての分母の最小公倍数（LCM）を計算
+        # これにより、すべての値が整数になるような共通の分母が得られる
+        common_denominator = 1
+        for f in fractions:
+            common_denominator = lcm(common_denominator, f.denominator)
+
+        # 2. 共通の分母を使って、各値の新しい分子を計算
+        # 例: [1/2, 1/4] -> common_denominator=4 -> new_numerators=[2, 1]
+        numerators = [f.numerator * (common_denominator // f.denominator) for f in fractions]
+
+        # 3. 新しい分子リストの最大公約数（GCD）を計算
+        if not numerators:
+            return 1.0
+
+        common_numerator_gcd = numerators[0]
+        for i in range(1, len(numerators)):
+            common_numerator_gcd = math.gcd(common_numerator_gcd, numerators[i])
+
+        # 4. 最適なスケーリング倍率を計算
+        # 倍率 = (共通の分母) / (分子の最大公約数)
+        # これにより、スケール後の値が可能な限り小さな整数のセットになる
+        if common_numerator_gcd == 0:
+            return 1.0
+
+        return float(common_denominator) / float(common_numerator_gcd)
 
     def solve(self, optimization_mode: str, makespan_limit: int = None, module_quantities: dict = None, show_results: bool = True) -> dict:
         """
@@ -62,6 +133,24 @@ class RcpspScheduler:
             for module in current_input_data["resources"]["module"]:
                 if module["name"] in module_quantities:
                     module["quantity"] = module_quantities[module["name"]]
+
+        # スケーリング倍率が1.0でない場合にのみ、すべての時間関連の値をスケーリングする
+        if self.time_scaling_factor != 1.0:
+            if show_results:
+                # 上方・下方スケーリングの両方に対応できる一般的なメッセージに変更
+                print(f"INFO: Scaling all time values by a factor of {self.time_scaling_factor} for the solver.")
+            
+            # module_handling_timeのスケーリング
+            m_time = current_input_data.get("module_handling_time")
+            if m_time is not None:
+                current_input_data["module_handling_time"] = round(m_time * self.time_scaling_factor)
+            
+            # 各タスクのdurationのスケーリング
+            for task in current_input_data.get("tasks", []):
+                for mode in task.get("modes", []):
+                    duration = mode.get("duration")
+                    if duration is not None:
+                        mode["duration"] = round(duration * self.time_scaling_factor)
 
         problem, mode_to_resources_map, resolved_task_modes, recipe_to_caps_map = h.setup_rcpsp_problem(
             current_input_data, show_debug_prints=show_results
@@ -101,6 +190,7 @@ class RcpspScheduler:
                 irreducible_combinations=resolved_task_modes,
                 input_data=current_input_data,
                 optimization_mode=optimization_mode,
+                time_scaling_factor=self.time_scaling_factor,
                 **results,
             )
         elif show_results and status == h.cp_model.INFEASIBLE:
@@ -108,11 +198,16 @@ class RcpspScheduler:
 
         if status in (h.cp_model.OPTIMAL, h.cp_model.FEASIBLE):
             solver = results['solver']
-            makespan = solver.value(results['task_starts'][results['sink']])
+            scaled_makespan = solver.value(results['task_starts'][results['sink']])
+            # =============================================================================
+            # MODIFICATION: De-scale the makespan to its original unit
+            # =============================================================================
+            original_makespan = scaled_makespan / self.time_scaling_factor
             modules_used = int(solver.objective_value) if optimization_mode == 'MINIMIZE_MODULES' else 0
-            return {"status": status, "makespan": makespan, "modules": modules_used}
+            return {"status": status, "makespan": original_makespan, "modules": modules_used}
         else:
             return {"status": status, "makespan": float('inf'), "modules": float('inf')}
+
 
     def _find_analysis_boundaries(self, module_name: str, show_results: bool = False) -> dict:
         """
@@ -137,10 +232,12 @@ class RcpspScheduler:
         print(f"    -> Minimum makespan: {min_makespan}")
 
         # Step 2: Step1で得られた最短時間で実行するために必要なモジュール数を確認
-        print(f"\n[2/2] Calculating modules needed for the minimum makespan of {int(min_makespan)}...")
-        res_max_modules = self.solve('MINIMIZE_MODULES', makespan_limit=int(min_makespan), module_quantities={module_name: module_upper_limit}, show_results=show_results)
+        # NOTE: solveメソッドはスケール済みの整数を期待するため、ここでスケーリングと整数変換を行う
+        scaled_limit = int(min_makespan * self.time_scaling_factor)
+        print(f"\n[2/2] Calculating modules needed for the minimum makespan of {min_makespan}...")
+        res_max_modules = self.solve('MINIMIZE_MODULES', makespan_limit=scaled_limit, module_quantities={module_name: module_upper_limit}, show_results=show_results)
         if res_max_modules["status"] == h.cp_model.INFEASIBLE:
-            print(f"  Error: Could not find a solution for makespan {int(min_makespan)}. Aborting.")
+            print(f"  Error: Could not find a solution for makespan {min_makespan}. Aborting.")
             return {"success": False}
         max_modules_needed = min(res_max_modules["modules"], module_upper_limit)
         print(f"    -> Max modules needed for minimum makespan: {max_modules_needed}")
@@ -173,8 +270,8 @@ class RcpspScheduler:
             res = self.solve('MINIMIZE_MAKESPAN', module_quantities={module_name: num_modules}, show_results=False)
             if res["status"] in (h.cp_model.OPTIMAL, h.cp_model.FEASIBLE):
                 if show_results:
-                    print(f"-> 実行可能な解を発見 (メイクスパン: {int(res['makespan'])})")
-                min_module_point = (num_modules, int(res["makespan"]))
+                    print(f"-> 実行可能な解を発見 (メイクスパン: {res['makespan']})")
+                min_module_point = (num_modules, res["makespan"])
                 break
             elif show_results:
                 print("-> 解なし")
@@ -186,7 +283,7 @@ class RcpspScheduler:
 
         # 短縮率を計算
         min_module_num, makespan_at_min_modules = min_module_point
-        max_module_num, makespan_at_max_modules = boundaries["max_modules_needed"], int(boundaries["min_makespan"])
+        max_module_num, makespan_at_max_modules = boundaries["max_modules_needed"], boundaries["min_makespan"]
 
         reduction_rate = 0.0
         if makespan_at_min_modules > 0 and makespan_at_min_modules > makespan_at_max_modules:
@@ -219,9 +316,11 @@ class RcpspScheduler:
         upper_bound_makespan = None
         for num_modules in range(max_modules_needed + 1):
             print(f"  - Calculating for {num_modules} modules (limit: {upper_bound_makespan})... ", end='', flush=True)
-            res = self.solve('MINIMIZE_MAKESPAN', makespan_limit=upper_bound_makespan, module_quantities={module_name: num_modules}, show_results=show_results)
+            # NOTE: solveメソッドはスケール済みの整数を期待するため、ここでスケーリングと整数変換を行う
+            scaled_limit = int(upper_bound_makespan * self.time_scaling_factor) if upper_bound_makespan is not None else None
+            res = self.solve('MINIMIZE_MAKESPAN', makespan_limit=scaled_limit, module_quantities={module_name: num_modules}, show_results=show_results)
             if res["status"] in (h.cp_model.OPTIMAL, h.cp_model.FEASIBLE):
-                makespan = int(res["makespan"])
+                makespan = res["makespan"]
                 raw_points.append((num_modules, makespan))
                 upper_bound_makespan = makespan
                 print(f"-> Makespan: {makespan}")
@@ -243,6 +342,8 @@ class RcpspScheduler:
             return
 
         print("\n[+] Preparing data and plotting the results...")
+        # NOTE: raw_pointsのmakespanは元のスケールに戻されているため、int()をかけると情報が失われる可能性がある。
+        # グラフ描画ではfloatのままで問題ない。
         points_for_plot = [(makespan, num_modules) for num_modules, makespan in raw_points]
         self._plot_tradeoff_graph(points_for_plot, module_name)
 
@@ -291,11 +392,12 @@ class RcpspScheduler:
         plt.ylabel(f'Minimum Required "{module_name}" Modules', fontsize=12)
         plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.grid(axis='x', linestyle=':', alpha=0.5)
-        plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
+        # MODIFICATION: Allow float values on the x-axis (time)
         plt.gca().yaxis.set_major_locator(MaxNLocator(integer=True))
         plt.legend()
         plt.tight_layout()
         plt.show()
+
 
     def analyze_correlation(self, module_name: str, arm_counts: list, handling_times: list):
         """
@@ -333,6 +435,8 @@ class RcpspScheduler:
                 potential_score = h.calculate_potential_score(current_input_data, use_physical_arm_limit=True, verbose=False)
 
                 # 2. Makespan短縮率を計算 (新しい設定で一時的なスケジューラを作成)
+                # NOTE: 新しいデータでSchedulerを初期化すると、そのデータに基づいて
+                #       time_scaling_factorが自動的に再計算される。
                 temp_scheduler = RcpspScheduler(current_input_data)
                 reduction_rate = temp_scheduler.analyze_potential(module_name=module_name, show_results=False)
 
@@ -370,9 +474,10 @@ class RcpspScheduler:
         plt.scatter(x_scores, y_rates, alpha=0.7, label='Data Points')
 
         # y=x の理想線を追加
-        min_val = min(plt.xlim()[0], plt.ylim()[0])
-        max_val = max(plt.xlim()[1], plt.ylim()[1])
+        min_val = min(plt.xlim()[0], plt.ylim()[0], 0) # Ensure line starts from 0 or less
+        max_val = max(plt.xlim()[1], plt.ylim()[1], 1) # Ensure line goes to 1 or more
         plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal Agreement (y=x)')
+
 
         plt.title('Potential Score vs. Makespan Reduction Rate', fontsize=16)
         plt.xlabel('Parallelization Potential Score (Analysis Model)', fontsize=12)
@@ -419,14 +524,16 @@ def setup_arg_parser():
     override_group = parser.add_argument_group('Override Options (for all modes EXCEPT correlation)')
     override_group.add_argument("--arm-count", type=int,
                                 help="Override the number of arm modules from the config file.")
-    override_group.add_argument("--handling-time", type=int,
+    # MODIFICATION: Change type to float to allow decimal values
+    override_group.add_argument("--handling-time", type=float,
                                 help="Override the module handling time from the config file.")
 
     # --- グループ3: Correlationモード専用引数 ---
     correlation_group = parser.add_argument_group('Correlation Mode Options (correlation mode ONLY)')
     correlation_group.add_argument("--arm-counts", type=int, nargs='+',
                                    help="List of arm counts to iterate over.")
-    correlation_group.add_argument("--handling-times", type=int, nargs='+',
+    # MODIFICATION: Change type to float to allow decimal values
+    correlation_group.add_argument("--handling-times", type=float, nargs='+',
                                    help="List of module handling times to iterate over.")
     
     return parser
@@ -472,10 +579,17 @@ def load_and_prepare_config(args):
 
 def execute_mode(scheduler, args, module_name, input_data):
     """解析された引数に基づいて、指定されたモードを実行します。"""
-    if args.mode == "makespan":
-        scheduler.solve(optimization_mode='MINIMIZE_MAKESPAN', show_results=True)
-    elif args.mode == "modules":
-        scheduler.solve(optimization_mode='MINIMIZE_MODULES', show_results=True, makespan_limit=input_data.get("makespan_limit"))
+    if args.mode in ("makespan", "modules"):
+        # 元の値を取得
+        unscaled_limit = input_data.get("makespan_limit")
+        scaled_limit = None
+        # 値が存在する場合、ここでスケーリングと整数変換を行う
+        if unscaled_limit is not None:
+            scaled_limit = int(unscaled_limit * scheduler.time_scaling_factor)
+        if args.mode == "makespan":
+            scheduler.solve(optimization_mode='MINIMIZE_MAKESPAN', show_results=True, makespan_limit=scaled_limit)
+        elif args.mode == "modules":
+            scheduler.solve(optimization_mode='MINIMIZE_MODULES', show_results=True, makespan_limit=scaled_limit)
     elif args.mode == "tradeoff":
         scheduler.analyze_tradeoff(module_name=module_name, show_results=False)
     elif args.mode == "potential":
@@ -483,6 +597,7 @@ def execute_mode(scheduler, args, module_name, input_data):
         scheduler.analyze_potential(module_name=module_name, show_results=True)
     elif args.mode == "correlation":
         if not args.arm_counts or not args.handling_times:
+            # This check is already in main, but kept for safety
             parser.error("--arm-counts and --handling-times are REQUIRED for 'correlation' mode.")
         scheduler.analyze_correlation(
             module_name=module_name,
@@ -518,7 +633,6 @@ def main():
     # 4. モードの実行
     scheduler = RcpspScheduler(input_data)
     execute_mode(scheduler, args, module_name, input_data)
-
 
 if __name__ == "__main__":
     main()

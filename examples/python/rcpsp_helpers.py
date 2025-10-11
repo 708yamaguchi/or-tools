@@ -73,8 +73,11 @@ def generate_rcpsp_max_from_json(input_data, resolved_task_modes, debug_print=Fa
     module_map = {res['name']: i for i, res in enumerate(actual_modules)}
 
     module_handling_time = input_data.get("module_handling_time", 5)
-    if type(module_handling_time) != int or module_handling_time <= 0:
-        raise ValueError(f"module_handling_time '{module_handling_time}' must be int and greater than 0")
+    # module_handling_timeが10.0のような浮動小数点数も整数として扱えるようにする
+    if isinstance(module_handling_time, float) and module_handling_time.is_integer():
+        module_handling_time = int(module_handling_time)
+    if not isinstance(module_handling_time, int) or module_handling_time <= 0:
+        raise ValueError(f"module_handling_time '{module_handling_time}' must be a positive integer.")
 
     # 場所情報の読み込み
     locations = input_data.get('locations', [])
@@ -512,6 +515,7 @@ def print_schedule_by_task(
     mode_to_name: dict,
     mode_to_resources_map: dict,
     makespan: float,
+    time_scaling_factor: float = 1.0,
 ) -> None:
     """
     Prints the schedule details for each task.
@@ -522,7 +526,7 @@ def print_schedule_by_task(
     print("--- Schedule by Task (Skipped tasks included) ---")
     name_width = max(len(name) for name in task_id_to_name.values()) + 2
     source_name = task_id_to_name.get(source, f"Task {source}")
-    source_start_val = solver.value(task_starts[source])
+    source_start_val = solver.value(task_starts[source]) / time_scaling_factor
     print(
         f"{source_name:<{name_width}} "
         f"Start={source_start_val:<3} "
@@ -532,9 +536,9 @@ def print_schedule_by_task(
     for t in sorted(all_active_tasks):
         task_name = task_id_to_name.get(t, f"Task {t}")
         if t in executed_tasks:
-            start_val = solver.value(task_starts[t])
-            duration_val = solver.value(task_durations[t])
-            end_val = solver.value(task_ends[t])
+            start_val = solver.value(task_starts[t]) / time_scaling_factor
+            duration_val = solver.value(task_durations[t]) / time_scaling_factor
+            end_val = solver.value(task_ends[t]) / time_scaling_factor
 
             mode_str = "N/A"
             recipe_index = selected_recipes.get(t)
@@ -558,7 +562,7 @@ def print_schedule_by_task(
         else:
             print(f"{task_name:<{name_width}}: --- SKIPPED ---")
     sink_name = task_id_to_name.get(sink, f"Task {sink}")
-    sink_start_val = solver.value(task_starts[sink])
+    sink_start_val = solver.value(task_starts[sink]) / time_scaling_factor
     print(
         f"{sink_name:<{name_width}} "
         f"Start={sink_start_val:<3} "
@@ -580,18 +584,20 @@ def print_schedule_by_time_step(
     mode_to_name: dict,
     mode_to_resources_map: dict,
     makespan: float,
+    time_scaling_factor: float = 1.0,
 ):
     """
     Prints running tasks and resource status for each time step.
     """
     print("\n--- Schedule by Time Step ---")
-    loop_end = int(makespan)
+    # makespanが小数になりうるため、math.ceilでループの終点を決定
+    loop_end = math.ceil(makespan)
     for t in range(loop_end + 1):
         running_tasks_info = []
         running_tasks_ids = []
         for task_id in executed_tasks:
-            start_time = solver.value(task_starts[task_id])
-            end_time = solver.value(task_ends[task_id])
+            start_time = solver.value(task_starts[task_id]) / time_scaling_factor
+            end_time = solver.value(task_ends[task_id]) / time_scaling_factor
             if start_time <= t < end_time:
                 running_tasks_ids.append(task_id)
                 task_name = task_id_to_name.get(task_id, f"Task {task_id}")
@@ -624,7 +630,13 @@ def print_schedule_by_time_step(
                 remaining_capacity = total_capacity - used_capacity
                 print(f"    - (Renewable)   Resource {res_id}: Remaining={remaining_capacity}/{total_capacity} (Used={used_capacity})")
             else:
-                consumed_so_far = sum(solver.value(task_to_resource_demands[task_id][res_id]) for task_id in executed_tasks if solver.value(task_starts[task_id]) <= t and task_id in task_to_resource_demands and len(task_to_resource_demands[task_id]) > res_id)
+                consumed_so_far = sum(
+                    solver.value(task_to_resource_demands[task_id][res_id]) 
+                    for task_id in executed_tasks 
+                    if (solver.value(task_starts[task_id]) / time_scaling_factor) <= t 
+                    and task_id in task_to_resource_demands 
+                    and len(task_to_resource_demands[task_id]) > res_id
+                )
                 remaining = total_capacity - consumed_so_far
                 print(f"    - (Reservoir)   Resource {res_id}: Remaining={remaining}/{total_capacity} (Consumed={consumed_so_far})")
 
@@ -739,7 +751,8 @@ def _plot_gantt_chart(
     task_id_to_location,
     title,
     title_fontsize=16,
-    label_fontsize=12
+    label_fontsize=12,
+    time_scaling_factor=1.0    
 ):
     """視覚的に改善されたGanttチャートをmatplotlibのAxesオブジェクトにプロットします。"""
     y_labels = [task_id_to_name.get(t, f"Task {t}") for t in all_task_ids]
@@ -835,9 +848,9 @@ def _plot_gantt_chart(
 
         # 2. タスクバーを描画
         if t in executed_tasks and t in selected_recipes:
-            start = solver.value(task_starts[t])
-            duration = solver.value(task_durations[t])
-            if duration <= 0:
+            start = solver.value(task_starts[t]) / time_scaling_factor
+            duration = solver.value(task_durations[t]) / time_scaling_factor
+            if duration <= 1e-6:
                 continue
 
             recipe_idx = selected_recipes.get(t)
@@ -902,7 +915,8 @@ def visualize_schedule_only(
     input_data,
     makespan,
     title_fontsize=16,
-    label_fontsize=12
+    label_fontsize=12,
+    time_scaling_factor=1.0,
 ):
     """
     Visualizes the scheduling result with the improved Gantt chart.
@@ -953,7 +967,8 @@ def visualize_schedule_only(
         task_id_to_location,  # 場所情報を描画関数に渡す
         title,
         title_fontsize=title_fontsize,
-        label_fontsize=label_fontsize
+        label_fontsize=label_fontsize,
+        time_scaling_factor=time_scaling_factor
     )
 
     ax.set_xlabel("Time", fontsize=label_fontsize)
@@ -1195,10 +1210,11 @@ def _process_and_display_solution(
     irreducible_combinations,
     input_data,
     module_capacities,
-    optimization_mode, # ★変更点: 最適化モードを受け取る
+    optimization_mode,
+    time_scaling_factor=1.0,
 ):
     """Processes and displays the solution from the solver."""
-    actual_makespan = solver.value(task_starts[sink])
+    actual_makespan = solver.value(task_starts[sink]) / time_scaling_factor
 
     executed_tasks = []
     for t in all_active_tasks:
@@ -1222,6 +1238,7 @@ def _process_and_display_solution(
         task_id_to_name, mode_to_name,
         mode_to_resources_map=mode_to_resources_map,
         makespan=actual_makespan,
+        time_scaling_factor=time_scaling_factor,
     )
     # Commenting out time-step print for brevity, can be re-enabled if needed
     print_schedule_by_time_step(
@@ -1230,15 +1247,17 @@ def _process_and_display_solution(
         task_id_to_name, mode_to_name,
         mode_to_resources_map=mode_to_resources_map,
         makespan=actual_makespan,
+        time_scaling_factor=time_scaling_factor,
     )
 
     # --- 最適化モードに応じて結果サマリーを表示 ---
     print("\nSolution Found:")
     if optimization_mode == 'MINIMIZE_MAKESPAN':
-        print(f"Optimal Makespan: {solver.objective_value}")
+        objective_val = solver.objective_value / time_scaling_factor
+        print(f"Optimal Makespan: {objective_val}")
     elif optimization_mode == 'MINIMIZE_MODULES':
         print(f"Optimal Total Modules Required: {int(solver.objective_value)}")
-        print(f"Schedule completed in {solver.value(task_starts[sink])} time units.")
+        print(f"Schedule completed in {actual_makespan} time units.")
         print("--------------------------------------------------")
         print("--- Required Capacity per Module ---")
         if not module_capacities:
@@ -1262,7 +1281,8 @@ def _process_and_display_solution(
         "Task Schedule Gantt Chart", recipe_to_caps_map, mode_to_resources_map,
         capability_color_map, resource_color_map, input_data=input_data,
         makespan=actual_makespan,
-        title_fontsize=title_font_size, label_fontsize=label_font_size
+        title_fontsize=title_font_size, label_fontsize=label_font_size,
+        time_scaling_factor=time_scaling_factor,
     )
 
 
