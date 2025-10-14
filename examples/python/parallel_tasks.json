@@ -1,44 +1,38 @@
 {
     "project_name": "Parallel task example",
-    "makespan_limit": 175,
-    "module_handling_time": 5,
+    "makespan_limit": 100,
+    "module_handling_time": 2,
     "locations": [
         {"name": "610", "max_robots": 99}
     ],
     "resources": {
         "robot": [
-            {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 2}}
+            {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 1, "transport": 1}}
         ],
         "module": [
-            {"name": "arm_m", "quantity": 10, "capabilities": {"arm": 1}}
+            {"name": "arm_m", "quantity": 3, "capabilities": {"arm": 1}}
         ]
     },
     "tasks": [
-        {"name": "clean 1", "location": "610",
+        {"name": "キッチン壁拭き", "location": "610",
          "modes": [
-             {"duration": 20, "required_capabilities": {"arm": 3}},
-             {"duration": 30, "required_capabilities": {"arm": 2}},
-             {"duration": 45, "required_capabilities": {"arm": 1}}
+             {"duration": 10, "required_capabilities": {"arm": 1}}
          ]},
-        {"name": "clean 2", "location": "610",
+        {"name": "キッチン天板拭き", "location": "610",
          "modes": [
-             {"duration": 30, "required_capabilities": {"arm": 2}}
+             {"duration": 8, "required_capabilities": {"arm": 1}}
          ]},
-        {"name": "clean 3", "location": "610",
+        {"name": "机拭き1", "location": "610",
          "modes": [
-             {"duration": 25, "required_capabilities": {"arm": 1}}
+             {"duration": 7, "required_capabilities": {"arm": 1}}
          ]},
-        {"name": "clean 4", "location": "610",
+        {"name": "机拭き2", "location": "610",
          "modes": [
-             {"duration": 30, "required_capabilities": {"arm": 1}}
+             {"duration": 7, "required_capabilities": {"arm": 1}}
          ]},
-        {"name": "clean 5", "location": "610",
+        {"name": "シンク拭き", "location": "610",
          "modes": [
-             {"duration": 30, "required_capabilities": {"arm": 1}}
-         ]},
-        {"name": "clean 6", "location": "610",
-         "modes": [
-             {"duration": 30, "required_capabilities": {"arm": 1}}
+             {"duration": 12, "required_capabilities": {"arm": 1}}
          ]}
     ]
 }
