@@ -18,6 +18,10 @@ from matplotlib.ticker import MaxNLocator
 import matplotlib.cm as cm
 import numpy as np
 
+# plt.rcParams['font.family'] = 'MS Gothic'  # Windows
+# plt.rcParams['font.family'] = 'Hiragino Sans'  # Mac
+plt.rcParams['font.family'] = 'IPAexGothic'  # Linux
+
 # --- Helper Functions for Task ID Calculation ---
 # int -> Tuple[int, int, int]
 def get_task_ids(task_index):
@@ -971,7 +975,7 @@ def visualize_schedule_only(
         time_scaling_factor=time_scaling_factor
     )
 
-    ax.set_xlabel("Time", fontsize=label_fontsize)
+    ax.set_xlabel("Time[s]", fontsize=label_fontsize)
     ax.tick_params(axis='x', labelsize=label_fontsize)
     ax.set_xlim(-8, makespan + 5) # ラベル表示用に左側のリミットを調整
     ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=20))
