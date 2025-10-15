@@ -1,34 +1,38 @@
 {
     "project_name": "Combined task example",
-    "makespan_limit": 100,
+    "makespan_limit": 150,
     "module_handling_time": 2,
     "locations": [
         {"name": "610", "max_robots": 99}
     ],
     "resources": {
         "robot": [
-            {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 1, "transport": 1}}
+            {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 1}}
         ],
         "module": [
             {"name": "arm_m", "quantity": 3, "capabilities": {"arm": 1}}
         ]
     },
     "tasks": [
-        {"name": "食材を持ってくる", "location": "610",
+        {"name": "食材を袋から取り出す", "location": "610",
          "modes": [
-             {"duration": 5, "required_capabilities": {"arm": 1, "transport": 1}}
+             {"duration": 4, "required_capabilities": {"arm": 1}}
          ]},
-        {"name": "調理1", "location": "610", "predecessors": ["食材を持ってくる"],
+        {"name": "食材をフライパンにセット", "location": "610", "predecessors": ["食材を袋から取り出す"],
          "modes": [
-             {"duration": 10, "required_capabilities": {"arm": 1}}
+             {"duration": 8, "required_capabilities": {"arm": 1}}
          ]},
-        {"name": "調理2", "location": "610", "predecessors": ["食材を持ってくる"],
+        {"name": "焼き加減を見ながら調理", "location": "610", "predecessors": ["食材をフライパンにセット"],
          "modes": [
              {"duration": 15, "required_capabilities": {"arm": 1}}
          ]},
-        {"name": "配膳", "location": "610", "predecessors": ["調理1", "調理2"],
+        {"name": "調味料を用意", "location": "610", "predecessors": [],
          "modes": [
-             {"duration": 5, "required_capabilities": {"arm": 1, "transport": 1}}
+             {"duration": 10, "required_capabilities": {"arm": 1}}
+         ]},
+        {"name": "料理に調味料をかける", "location": "610", "predecessors": ["焼き加減を見ながら調理", "調味料を用意"],
+         "modes": [
+             {"duration": 3, "required_capabilities": {"arm": 1}}
          ]}
     ]
 }
