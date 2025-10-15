@@ -7,32 +7,32 @@
     ],
     "resources": {
         "robot": [
-            {"name": "r8_r", "quantity": 1, "capabilities": {"arm": 1}}
+            {"name": "robot", "quantity": 1, "capabilities": {"manip": 1}}
         ],
         "module": [
-            {"name": "arm_m", "quantity": 3, "capabilities": {"arm": 1}}
+            {"name": "arm", "quantity": 3, "capabilities": {"manip": 1}}
         ]
     },
     "tasks": [
         {"name": "食材を袋から取り出す", "location": "610",
          "modes": [
-             {"duration": 4, "required_capabilities": {"arm": 1}}
+             {"duration": 4, "required_capabilities": {"manip": 1}}
          ]},
         {"name": "食材をフライパンにセット", "location": "610", "predecessors": ["食材を袋から取り出す"],
          "modes": [
-             {"duration": 8, "required_capabilities": {"arm": 1}}
+             {"duration": 8, "required_capabilities": {"manip": 1}}
          ]},
         {"name": "焼き加減を見ながら調理", "location": "610", "predecessors": ["食材をフライパンにセット"],
          "modes": [
-             {"duration": 15, "required_capabilities": {"arm": 1}}
+             {"duration": 15, "required_capabilities": {"manip": 1}}
          ]},
         {"name": "調味料を用意", "location": "610", "predecessors": [],
          "modes": [
-             {"duration": 10, "required_capabilities": {"arm": 1}}
+             {"duration": 10, "required_capabilities": {"manip": 1}}
          ]},
         {"name": "料理に調味料をかける", "location": "610", "predecessors": ["焼き加減を見ながら調理", "調味料を用意"],
          "modes": [
-             {"duration": 3, "required_capabilities": {"arm": 1}}
+             {"duration": 3, "required_capabilities": {"manip": 1}}
          ]}
     ]
 }
