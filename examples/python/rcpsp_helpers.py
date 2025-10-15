@@ -654,16 +654,19 @@ def _get_base_task_name(task_name: str) -> str:
 
 
 def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_data, show_symbols=True, title_fontsize=12, label_fontsize=10):
-    # --- Capabilities Legend ---
-    fig.text(0.83, 0.90, "Capabilities", fontsize=title_fontsize, fontweight='bold')
+    draw_capabilities = False
     y_pos = 0.88
-    for cap, color in capability_color_map.items():
-        ellipse = patches.Ellipse(xy=(0.835, y_pos), width=0.012, height=0.012,
-                                  facecolor=color, edgecolor='black',
-                                  transform=fig.transFigure, figure=fig)
-        fig.patches.append(ellipse)
-        fig.text(0.85, y_pos, cap, fontsize=label_fontsize, va='center')
-        y_pos -= 0.03
+
+    # --- Capabilities Legend ---
+    if draw_capabilities:
+        fig.text(0.83, 0.90, "Capabilities", fontsize=title_fontsize, fontweight='bold')
+        for cap, color in capability_color_map.items():
+            ellipse = patches.Ellipse(xy=(0.835, y_pos), width=0.012, height=0.012,
+                                      facecolor=color, edgecolor='black',
+                                      transform=fig.transFigure, figure=fig)
+            fig.patches.append(ellipse)
+            fig.text(0.85, y_pos, cap, fontsize=label_fontsize, va='center')
+            y_pos -= 0.03
 
     # --- Resources Legend ---
     fig.text(0.83, y_pos - 0.02, "Resources", fontsize=title_fontsize, fontweight='bold')
@@ -680,8 +683,6 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
         return caps
 
     # 1. Robots (Renewable) のセクション
-    fig.text(0.83, y_pos, "Robots", fontsize=label_fontsize, fontweight='bold', style='italic', color='dimgray')
-    y_pos -= 0.035
     for res in input_data["resources"]["robot"]:
         res_name = res["name"]
         res_color = resource_color_map.get(res_name, "grey")
@@ -693,23 +694,22 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
         fig.text(0.85, y_pos, res_name, fontsize=label_fontsize, va='center')
         fig.text(0.85, y_pos - 0.015, f"(Qty. {capacity})", fontsize=label_fontsize - 2, color='dimgray', va='center')
 
-        x_pos_cap = 0.92
-        caps_to_draw = get_caps_to_draw(res.get("capabilities", []))
-        for cap in caps_to_draw:
-            cap_color = capability_color_map.get(cap, "grey")
-            ellipse = patches.Ellipse((x_pos_cap, y_pos), width=0.01, height=0.01,
-                                    facecolor=cap_color, edgecolor="black", linewidth=0.5,
-                                    transform=fig.transFigure, figure=fig)
-            fig.patches.append(ellipse)
-            x_pos_cap += 0.012
-        y_pos -= 0.045
+        if draw_capabilities:
+            x_pos_cap = 0.92
+            caps_to_draw = get_caps_to_draw(res.get("capabilities", []))
+            for cap in caps_to_draw:
+                cap_color = capability_color_map.get(cap, "grey")
+                ellipse = patches.Ellipse((x_pos_cap, y_pos), width=0.01, height=0.01,
+                                        facecolor=cap_color, edgecolor="black", linewidth=0.5,
+                                        transform=fig.transFigure, figure=fig)
+                fig.patches.append(ellipse)
+                x_pos_cap += 0.012
+            y_pos -= 0.045
 
     # セクション間のスペースを確保
-    y_pos -= 0.02
+    y_pos -= 0.055
 
     # 2. Modules (Reservoir) のセクション
-    fig.text(0.83, y_pos, "Modules", fontsize=label_fontsize, fontweight='bold', style='italic', color='dimgray')
-    y_pos -= 0.035
     for res in input_data["resources"]["module"]:
         res_name = res["name"]
         res_color = resource_color_map.get(res_name, "grey")
@@ -721,15 +721,16 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
         fig.text(0.85, y_pos, res_name, fontsize=label_fontsize, va='center')
         fig.text(0.85, y_pos - 0.015, f"(Qty. {capacity})", fontsize=label_fontsize - 2, color='dimgray', va='center')
 
-        x_pos_cap = 0.92
-        caps_to_draw = get_caps_to_draw(res.get("capabilities", []))
-        for cap in caps_to_draw:
-            cap_color = capability_color_map.get(cap, "grey")
-            ellipse = patches.Ellipse((x_pos_cap, y_pos), width=0.01, height=0.01,
-                                    facecolor=cap_color, edgecolor="black", linewidth=0.5,
-                                    transform=fig.transFigure, figure=fig)
-            fig.patches.append(ellipse)
-            x_pos_cap += 0.012
+        if draw_capabilities:
+            x_pos_cap = 0.92
+            caps_to_draw = get_caps_to_draw(res.get("capabilities", []))
+            for cap in caps_to_draw:
+                cap_color = capability_color_map.get(cap, "grey")
+                ellipse = patches.Ellipse((x_pos_cap, y_pos), width=0.01, height=0.01,
+                                        facecolor=cap_color, edgecolor="black", linewidth=0.5,
+                                        transform=fig.transFigure, figure=fig)
+                fig.patches.append(ellipse)
+                x_pos_cap += 0.012
         y_pos -= 0.045
 
     # --- Symbols Legend ---
@@ -737,10 +738,11 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
         y_pos -= 0.01
         fig.text(0.83, y_pos, "Symbols", fontsize=title_fontsize, fontweight='bold')
         y_pos -= 0.035
+        robot_color = resource_color_map.get(input_data["resources"]["robot"][0]["name"], "grey")
         fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.0075), 0.01, 0.015,
-                                          facecolor='lightgrey', edgecolor='black', hatch='//',
+                                          facecolor=robot_color, edgecolor='black', hatch='//',
                                           transform=fig.transFigure, figure=fig)])
-        fig.text(0.85, y_pos, "Robot-led Placement / Retrieval", fontsize=label_fontsize - 1, va='center')
+        fig.text(0.85, y_pos, "Robot-led\nPlacement / Retrieval", fontsize=label_fontsize - 1, va='center')
 
 
 def _plot_gantt_chart(
@@ -756,7 +758,7 @@ def _plot_gantt_chart(
     title,
     title_fontsize=16,
     label_fontsize=12,
-    time_scaling_factor=1.0    
+    time_scaling_factor=1.0
 ):
     """視覚的に改善されたGanttチャートをmatplotlibのAxesオブジェクトにプロットします。"""
     y_labels = [task_id_to_name.get(t, f"Task {t}") for t in all_task_ids]
@@ -781,74 +783,78 @@ def _plot_gantt_chart(
 
     ax.set_yticks(range(len(new_y_labels)))
     ax.set_yticklabels(new_y_labels, fontsize=label_fontsize)
+    # Y軸の表示範囲を全ラベルが収まるように設定することで、
+    # durationが0で描画されないタスクのラベルも表示されるようになる
+    ax.set_ylim(-0.5, len(new_y_labels) - 0.5)
 
-
-    # ★ 場所の区切り線とラベルを描画 ★
-    location_info = {loc['name']: loc for loc in input_data.get('locations', [])}
-    location_ranges = {}
-    current_loc_name = None
-
-    # 場所ごとのタスクの開始・終了インデックスを記録
-    for i, t_id in enumerate(all_task_ids):
-        loc = task_id_to_location.get(t_id)
-        if loc != current_loc_name:
-            if current_loc_name is not None:
-                location_ranges[current_loc_name]['end'] = i - 1
-            if loc is not None:
-                location_ranges[loc] = {'start': i, 'end': -1}
-            current_loc_name = loc
-    if current_loc_name is not None:
-        location_ranges[current_loc_name]['end'] = len(all_task_ids) - 1
-
-    # 区切り線とラベルを描画
-        for loc, y_range in location_ranges.items():
-            # 区切り線
-            if y_range['start'] > 0:
-                ax.axhline(y=y_range['start'] - 0.5, color='black', linestyle='-', linewidth=1.2)
-            # ラベル
-            info = location_info.get(loc)
-            if info:
-                # ラベルのY座標を領域の下端に設定
-                y_pos_bottom = y_range['end'] + 0.35
-                label = f"{info['name'].upper()} (Max: {info['max_robots']})"
-                ax.text(-7, y_pos_bottom, label,
-                        va='bottom',
-                        ha='left',
-                        fontsize=label_fontsize,
-                        fontweight='bold', color='black',
-                        bbox=dict(boxstyle="round,pad=0.3", fc='whitesmoke', ec='none', alpha=0.8))
+    draw_location = False
+    if draw_location:
+        # 場所の区切り線とラベルを描画
+        location_info = {loc['name']: loc for loc in input_data.get('locations', [])}
+        location_ranges = {}
+        current_loc_name = None
+        # 場所ごとのタスクの開始・終了インデックスを記録
+        for i, t_id in enumerate(all_task_ids):
+            loc = task_id_to_location.get(t_id)
+            if loc != current_loc_name:
+                if current_loc_name is not None:
+                    location_ranges[current_loc_name]['end'] = i - 1
+                if loc is not None:
+                    location_ranges[loc] = {'start': i, 'end': -1}
+                current_loc_name = loc
+        if current_loc_name is not None:
+            location_ranges[current_loc_name]['end'] = len(all_task_ids) - 1
+            # 区切り線とラベルを描画
+            for loc, y_range in location_ranges.items():
+                # 区切り線
+                if y_range['start'] > 0:
+                    ax.axhline(y=y_range['start'] - 0.5, color='black', linestyle='-', linewidth=1.2)
+                # ラベル
+                info = location_info.get(loc)
+                if info:
+                    # ラベルのY座標を領域の下端に設定
+                    y_pos_bottom = y_range['end'] + 0.35
+                    label = f"{info['name'].upper()} (Max: {info['max_robots']})"
+                    ax.text(-7, y_pos_bottom, label,
+                            va='bottom',
+                            ha='left',
+                            fontsize=label_fontsize,
+                            fontweight='bold', color='black',
+                            bbox=dict(boxstyle="round,pad=0.3", fc='whitesmoke', ec='none', alpha=0.8))
 
     # 各タスクのバーをプロット
+    draw_capabilities = False
     for i, t in enumerate(all_task_ids):
         task_name_full = task_id_to_name.get(t, f"Task {t}")
         base_task_name = _get_base_task_name(task_name_full)
 
-        # 1. 要求Capabilityの楕円を左側に描画 (Placement/Retrievalでは省略)
-        if not (task_name_full.startswith("Placement-") or task_name_full.startswith("Retrieval-")):
-            recipe_idx = selected_recipes.get(t)
-            # レシピ番号が取得できた場合のみ描画を試みる
-            if recipe_idx is not None:
-                # 新しいマップから、選択されたレシピに対応する要求機能を取得
-                required_caps_dict = recipe_to_caps_map.get((base_task_name, recipe_idx))
+        if draw_capabilities:
+            # 1. 要求Capabilityの楕円を左側に描画 (Placement/Retrievalでは省略)
+            if not (task_name_full.startswith("Placement-") or task_name_full.startswith("Retrieval-")):
+                recipe_idx = selected_recipes.get(t)
+                # レシピ番号が取得できた場合のみ描画を試みる
+                if recipe_idx is not None:
+                    # 新しいマップから、選択されたレシピに対応する要求機能を取得
+                    required_caps_dict = recipe_to_caps_map.get((base_task_name, recipe_idx))
 
-                if required_caps_dict:
-                    # 辞書から capability-count のペアをリストに展開
-                    caps_to_draw = []
-                    for cap, count in sorted(required_caps_dict.items()):
-                        caps_to_draw.extend([cap] * count)
-                    num_caps = len(caps_to_draw)
-                    start_y = i - (num_caps - 1) * 0.15
-                    for j, cap in enumerate(caps_to_draw):
-                        color = capability_color_map.get(cap, "grey")
-                        center_y = start_y + j * 0.3
-                        ellipse = patches.Ellipse(
-                            xy=(-1.5, center_y),
-                            width=1.2,
-                            height=0.25,
-                            facecolor=color, edgecolor="black", linewidth=0.5,
-                            clip_on=False
-                        )
-                        ax.add_patch(ellipse)
+                    if required_caps_dict:
+                        # 辞書から capability-count のペアをリストに展開
+                        caps_to_draw = []
+                        for cap, count in sorted(required_caps_dict.items()):
+                            caps_to_draw.extend([cap] * count)
+                        num_caps = len(caps_to_draw)
+                        start_y = i - (num_caps - 1) * 0.15
+                        for j, cap in enumerate(caps_to_draw):
+                            color = capability_color_map.get(cap, "grey")
+                            center_y = start_y + j * 0.3
+                            ellipse = patches.Ellipse(
+                                xy=(-1.5, center_y),
+                                width=1.2,
+                                height=0.25,
+                                facecolor=color, edgecolor="black", linewidth=0.5,
+                                clip_on=False
+                            )
+                            ax.add_patch(ellipse)
 
         # 2. タスクバーを描画
         if t in executed_tasks and t in selected_recipes:
@@ -1275,10 +1281,11 @@ def _process_and_display_solution(
 
     # Visualize
     title_font_size, label_font_size = 26, 18
-    visualize_task_combinations(
-        input_data, irreducible_combinations, capability_color_map,
-        resource_color_map, title_fontsize=title_font_size,
-        label_fontsize=label_font_size)
+    if False:
+        visualize_task_combinations(
+            input_data, irreducible_combinations, capability_color_map,
+            resource_color_map, title_fontsize=title_font_size,
+            label_fontsize=label_font_size)
     visualize_schedule_only(
         solver, all_active_tasks, executed_tasks, task_starts,
         task_durations, selected_recipes, task_id_to_name, mode_to_name,
@@ -1578,6 +1585,7 @@ def solve_rcpsp(
     if params:
         text_format.Parse(params, solver.parameters)
     solver.parameters.log_search_progress = verbose
+    # solver.num_search_workers = 1  # 毎回同じ解を出力したいとき
     status = solver.solve(model)
     results = { "solver": solver, "problem": problem, "all_active_tasks": all_active_tasks,
         "all_resources": all_resources, "source": source, "sink": sink,
