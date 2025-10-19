@@ -1,6 +1,6 @@
 {
     "project_name": "Parallel task example",
-    "makespan_limit": 100,
+    "makespan_limit": 26,
     "module_handling_time": 2,
     "locations": [
         {"name": "610", "max_robots": 99}
@@ -10,17 +10,17 @@
             {"name": "robot", "quantity": 1, "capabilities": {"manip": 1}}
         ],
         "module": [
-            {"name": "arm", "quantity": 3, "capabilities": {"manip": 1}}
+            {"name": "arm_m", "quantity": 3, "capabilities": {"manip": 1}}
         ]
     },
     "tasks": [
-        {"name": "キッチン壁拭き", "location": "610",
+        {"name": "IH拭き", "location": "610",
          "modes": [
-             {"duration": 10, "required_capabilities": {"manip": 1}}
+             {"duration": 8, "required_capabilities": {"manip": 1}}
          ]},
         {"name": "キッチン天板拭き", "location": "610",
          "modes": [
-             {"duration": 8, "required_capabilities": {"manip": 1}}
+             {"duration": 9.5, "required_capabilities": {"manip": 1}}
          ]},
         {"name": "机拭き1", "location": "610",
          "modes": [
