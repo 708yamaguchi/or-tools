@@ -249,7 +249,7 @@ class RcpspScheduler:
             "max_modules_needed": max_modules_needed
         }
 
-    def analyze_potential(self, module_name: str = "arm_m", show_results: bool = True) -> float:
+    def analyze_potential(self, module_name: str = "arm", show_results: bool = True) -> float:
         """並列化によるメイクスパン短縮率を計算し、その値を返します。"""
         if show_results:
             print("\n" + "="*5 + " 並列化によるメイクスパン短縮率をスケジューリングに基づいて計算 " + "="*5)
@@ -329,7 +329,7 @@ class RcpspScheduler:
 
         return raw_points
 
-    def analyze_tradeoff(self, module_name: str = "arm_m", show_results: bool = False):
+    def analyze_tradeoff(self, module_name: str = "arm", show_results: bool = False):
         """
         Makespanと特定モジュールの必要数のトレードオフ関係を分析し、グラフ化します。
         """
@@ -517,8 +517,8 @@ def setup_arg_parser():
 - tradeoff: Analyze the trade-off between makespan and modules.
 - potential: Compare the analysis model's potential score with the scheduler's result.
 - correlation: Analyze the correlation between potential score and makespan reduction rate.""")
-    base_group.add_argument("--module-name", type=str, default="arm_m",
-                            help="Specify the target module name (default: 'arm_m').")
+    base_group.add_argument("--module-name", type=str, default="arm",
+                            help="Specify the target module name (default: 'arm').")
 
     # --- グループ2: 上書き用引数 (correlationモード以外) ---
     override_group = parser.add_argument_group('Override Options (for all modes EXCEPT correlation)')
@@ -552,7 +552,7 @@ def load_and_prepare_config(args):
         return None
 
     # モジュール名を取得（引数がなければデフォルト値）
-    module_name = args.module_name if args.module_name else "arm_m"
+    module_name = args.module_name if args.module_name else "arm"
 
     # アーム台数の上書き
     if args.arm_count is not None:

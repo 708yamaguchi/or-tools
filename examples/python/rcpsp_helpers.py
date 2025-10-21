@@ -635,10 +635,10 @@ def print_schedule_by_time_step(
                 print(f"    - (Renewable)   Resource {res_id}: Remaining={remaining_capacity}/{total_capacity} (Used={used_capacity})")
             else:
                 consumed_so_far = sum(
-                    solver.value(task_to_resource_demands[task_id][res_id]) 
-                    for task_id in executed_tasks 
-                    if (solver.value(task_starts[task_id]) / time_scaling_factor) <= t 
-                    and task_id in task_to_resource_demands 
+                    solver.value(task_to_resource_demands[task_id][res_id])
+                    for task_id in executed_tasks
+                    if (solver.value(task_starts[task_id]) / time_scaling_factor) <= t
+                    and task_id in task_to_resource_demands
                     and len(task_to_resource_demands[task_id]) > res_id
                 )
                 remaining = total_capacity - consumed_so_far
@@ -691,8 +691,7 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
         fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.015), 0.01, 0.02,
                                           facecolor=res_color, edgecolor='black',
                                           transform=fig.transFigure, figure=fig)])
-        fig.text(0.85, y_pos, res_name, fontsize=label_fontsize, va='center')
-        fig.text(0.85, y_pos - 0.015, f"(Qty. {capacity})", fontsize=label_fontsize - 2, color='dimgray', va='center')
+        fig.text(0.85, y_pos, f"{res_name} (Qty. {capacity})", fontsize=label_fontsize, va='center')
 
         if draw_capabilities:
             x_pos_cap = 0.92
@@ -718,8 +717,7 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
         fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.015), 0.01, 0.02,
                                           facecolor=res_color, edgecolor='black',
                                           transform=fig.transFigure, figure=fig)])
-        fig.text(0.85, y_pos, res_name, fontsize=label_fontsize, va='center')
-        fig.text(0.85, y_pos - 0.015, f"(Qty. {capacity})", fontsize=label_fontsize - 2, color='dimgray', va='center')
+        fig.text(0.85, y_pos, f"{res_name} (Qty. {capacity})", fontsize=label_fontsize, va='center')
 
         if draw_capabilities:
             x_pos_cap = 0.92
@@ -782,7 +780,15 @@ def _plot_gantt_chart(
             new_y_labels.append(base_name)
 
     ax.set_yticks(range(len(new_y_labels)))
-    ax.set_yticklabels(new_y_labels, fontsize=label_fontsize)
+
+    # tick_labelsに、設定されたY軸ラベルオブジェクトのリストを格納。
+    tick_labels = ax.set_yticklabels(new_y_labels, fontsize=label_fontsize)
+    for label in tick_labels:
+        text = label.get_text().strip()
+        if text == "Placement" or text == "Retrieval":
+            label.set_color('gray')
+            # label.set_alpha(0.7)
+
     # Y軸の表示範囲を全ラベルが収まるように設定することで、
     # durationが0で描画されないタスクのラベルも表示されるようになる
     ax.set_ylim(-0.5, len(new_y_labels) - 0.5)
@@ -907,7 +913,7 @@ def _plot_gantt_chart(
         elif t not in executed_tasks:
             ax.text(0, i, "--- SKIPPED ---", va='center', ha='left', style='italic', color='lightgrey', fontsize=label_fontsize)
 
-    ax.set_ylabel("Task", fontsize=label_fontsize)
+    ax.set_ylabel("Tasks", fontsize=label_fontsize)
     ax.set_title(title, fontsize=title_fontsize)
     ax.invert_yaxis()
     ax.grid(True, which="major", axis="x", linestyle="--", linewidth=0.5)
