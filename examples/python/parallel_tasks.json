@@ -7,10 +7,10 @@
     ],
     "resources": {
         "robot": [
-            {"name": "robot", "quantity": 1, "capabilities": {"manip": 1}}
+            {"name": "Robot", "quantity": 1, "capabilities": {"manip": 1}}
         ],
         "module": [
-            {"name": "arm", "quantity": 3, "capabilities": {"manip": 1}}
+            {"name": "Arm", "quantity": 3, "capabilities": {"manip": 1}}
         ]
     },
     "tasks": [
