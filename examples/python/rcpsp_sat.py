@@ -370,10 +370,10 @@ class RcpspScheduler:
 
         # グラフの描画
         plt.figure(figsize=(12, 7))
-        # ステッププロットで「最適なトレードオフ曲線」を描画
-        step_plot_lines = plt.step(filtered_x, filtered_y, where='post', linestyle='-', label='Optimal Trade-off')
-        # 散布図で「全てのデータ点」を描画。zorder=3 で線より手前に点を表示, s=50でマーカーサイズを調整
-        plt.scatter(all_x, all_y, marker='o', zorder=3, s=50, label='All Data Points')
+        step_plot_lines = plt.step(filtered_x, filtered_y, where='post', linestyle='-',
+                                   label="Trade-off Boundary")
+        plt.scatter(all_x, all_y, marker='o', zorder=3, s=50,
+                    label="Per-Module Minimum Makespans")
         # グラフの上側と右側に直線を外挿
         min_x = min(p[0] for p in points)
         points_at_min_x = [p for p in points if p[0] == min_x]
@@ -387,14 +387,15 @@ class RcpspScheduler:
         plt.plot([start_point_up[0], start_point_up[0]], [start_point_up[1], ymax], linestyle='-', color=line_color)
         plt.plot([start_point_right[0], xmax], [start_point_right[1], start_point_right[1]], linestyle='-', color=line_color)
 
-        plt.title(f'Trade-off: Makespan vs. Required "{module_name}" Modules', fontsize=16)
-        plt.xlabel('Allowed Project Makespan (Time)', fontsize=12)
-        plt.ylabel(f'Minimum Required "{module_name}" Modules', fontsize=12)
+        plt.title('Trade-off: Makespan vs. Required Modules', fontsize=32)
+        plt.xlabel('Makespan [s]', fontsize=24)
+        plt.ylabel('Required Modules', fontsize=24)
+        plt.xticks(fontsize=18)
+        plt.yticks(fontsize=18)
         plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.grid(axis='x', linestyle=':', alpha=0.5)
-        # MODIFICATION: Allow float values on the x-axis (time)
         plt.gca().yaxis.set_major_locator(MaxNLocator(integer=True))
-        plt.legend()
+        plt.legend(fontsize=18)
         plt.tight_layout()
         plt.show()
 

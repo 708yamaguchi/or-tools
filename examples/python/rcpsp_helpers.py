@@ -659,17 +659,17 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
 
     # --- Capabilities Legend ---
     if draw_capabilities:
-        fig.text(0.83, 0.90, "Capabilities", fontsize=title_fontsize, fontweight='bold')
+        fig.text(0.83, 0.90, "Capabilities", fontsize=title_fontsize - 4, fontweight='bold')
         for cap, color in capability_color_map.items():
             ellipse = patches.Ellipse(xy=(0.835, y_pos), width=0.012, height=0.012,
                                       facecolor=color, edgecolor='black',
                                       transform=fig.transFigure, figure=fig)
             fig.patches.append(ellipse)
-            fig.text(0.85, y_pos, cap, fontsize=label_fontsize, va='center')
+            fig.text(0.85, y_pos, cap, fontsize=title_fontsize - 4, va='center')
             y_pos -= 0.03
 
     # --- Resources Legend ---
-    fig.text(0.83, y_pos - 0.02, "Resources", fontsize=title_fontsize, fontweight='bold')
+    fig.text(0.83, y_pos - 0.02, "Resources", fontsize=title_fontsize - 4, fontweight='bold')
     y_pos -= 0.05
 
     # Helper to generate capability list from either dict or list format
@@ -691,7 +691,7 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
         fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.015), 0.01, 0.02,
                                           facecolor=res_color, edgecolor='black',
                                           transform=fig.transFigure, figure=fig)])
-        fig.text(0.85, y_pos, f"{res_name} (Qty. {capacity})", fontsize=label_fontsize, va='center')
+        fig.text(0.85, y_pos - 0.005, f"{res_name} (Qty. {capacity})", fontsize=label_fontsize, va='center')
 
         if draw_capabilities:
             x_pos_cap = 0.92
@@ -717,7 +717,7 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
         fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.015), 0.01, 0.02,
                                           facecolor=res_color, edgecolor='black',
                                           transform=fig.transFigure, figure=fig)])
-        fig.text(0.85, y_pos, f"{res_name} (Qty. {capacity})", fontsize=label_fontsize, va='center')
+        fig.text(0.85, y_pos - 0.005, f"{res_name} (Qty. {capacity})", fontsize=label_fontsize, va='center')
 
         if draw_capabilities:
             x_pos_cap = 0.92
@@ -733,14 +733,14 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
 
     # --- Symbols Legend ---
     if show_symbols:
-        y_pos -= 0.01
-        fig.text(0.83, y_pos, "Symbols", fontsize=title_fontsize, fontweight='bold')
-        y_pos -= 0.035
+        y_pos -= 0.05
+        fig.text(0.83, y_pos, "Symbols", fontsize=title_fontsize - 4, fontweight='bold')
+        y_pos -= 0.075
         robot_color = resource_color_map.get(input_data["resources"]["robot"][0]["name"], "grey")
         fig.patches.extend([plt.Rectangle((0.83, y_pos - 0.0075), 0.01, 0.015,
                                           facecolor=robot_color, edgecolor='black', hatch='//',
                                           transform=fig.transFigure, figure=fig)])
-        fig.text(0.85, y_pos, "Robot-led\nPlacement / Retrieval", fontsize=label_fontsize - 1, va='center')
+        fig.text(0.85, y_pos, "Robot-led\nPlacement/\nRetrieval", fontsize=label_fontsize - 1, va='center')
 
 
 def _plot_gantt_chart(
@@ -782,7 +782,7 @@ def _plot_gantt_chart(
     ax.set_yticks(range(len(new_y_labels)))
 
     # tick_labelsに、設定されたY軸ラベルオブジェクトのリストを格納。
-    tick_labels = ax.set_yticklabels(new_y_labels, fontsize=label_fontsize)
+    tick_labels = ax.set_yticklabels(new_y_labels, fontsize=label_fontsize - 4)
     for label in tick_labels:
         text = label.get_text().strip()
         if text == "Placement" or text == "Retrieval":
@@ -913,6 +913,9 @@ def _plot_gantt_chart(
         elif t not in executed_tasks:
             ax.text(0, i, "--- SKIPPED ---", va='center', ha='left', style='italic', color='lightgrey', fontsize=label_fontsize)
 
+    ax.set_xlabel("Time [s]", fontsize=label_fontsize)
+    ax.tick_params(axis='x', labelsize=label_fontsize - 4)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=20))
     ax.set_ylabel("Tasks", fontsize=label_fontsize)
     ax.set_title(title, fontsize=title_fontsize)
     ax.invert_yaxis()
@@ -986,11 +989,7 @@ def visualize_schedule_only(
         label_fontsize=label_fontsize,
         time_scaling_factor=time_scaling_factor
     )
-
-    ax.set_xlabel("Time[s]", fontsize=label_fontsize)
-    ax.tick_params(axis='x', labelsize=label_fontsize)
     ax.set_xlim(-8, makespan + 5) # ラベル表示用に左側のリミットを調整
-    ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=20))
 
     _draw_custom_legends(
         fig,
@@ -1286,7 +1285,7 @@ def _process_and_display_solution(
     print("--------------------------------------------------")
 
     # Visualize
-    title_font_size, label_font_size = 26, 18
+    title_font_size, label_font_size = 32, 24
     if False:
         visualize_task_combinations(
             input_data, irreducible_combinations, capability_color_map,
