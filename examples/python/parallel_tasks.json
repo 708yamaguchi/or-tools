@@ -1,7 +1,7 @@
 {
     "project_name": "Parallel task example",
-    "makespan_limit": 52,
-    "module_handling_time": 4,
+    "makespan_limit": 520,
+    "module_handling_time": 40,
     "locations": [
         {"name": "610", "max_robots": 99}
     ],
@@ -10,29 +10,29 @@
             {"name": "robot", "quantity": 1, "capabilities": {"manip": 1}}
         ],
         "module": [
-            {"name": "arm_m", "quantity": 3, "capabilities": {"manip": 1}}
+            {"name": "arm", "quantity": 3, "capabilities": {"manip": 1}}
         ]
     },
     "tasks": [
-        {"name": "キッチン拭き", "location": "610",
+        {"name": "Wipe kitchen", "location": "610",
          "modes": [
-             {"duration": 16, "required_capabilities": {"manip": 1}}
+             {"duration": 160, "required_capabilities": {"manip": 1}}
          ]},
-        {"name": "IH拭き", "location": "610",
+        {"name": "Wipe IH", "location": "610",
          "modes": [
-             {"duration": 19, "required_capabilities": {"manip": 1}}
+             {"duration": 190, "required_capabilities": {"manip": 1}}
          ]},
-        {"name": "机拭き1", "location": "610",
+        {"name": "Wipe table1", "location": "610",
          "modes": [
-             {"duration": 14, "required_capabilities": {"manip": 1}}
+             {"duration": 140, "required_capabilities": {"manip": 1}}
          ]},
-        {"name": "机拭き2", "location": "610",
+        {"name": "Wipe table2", "location": "610",
          "modes": [
-             {"duration": 14, "required_capabilities": {"manip": 1}}
+             {"duration": 140, "required_capabilities": {"manip": 1}}
          ]},
-        {"name": "シンク拭き", "location": "610",
+        {"name": "Wipe sink", "location": "610",
          "modes": [
-             {"duration": 24, "required_capabilities": {"manip": 1}}
+             {"duration": 240, "required_capabilities": {"manip": 1}}
          ]}
     ]
 }
