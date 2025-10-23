@@ -914,10 +914,10 @@ def _plot_gantt_chart(
             ax.text(0, i, "--- SKIPPED ---", va='center', ha='left', style='italic', color='lightgrey', fontsize=label_fontsize)
 
     ax.set_xlabel("Time [s]", fontsize=label_fontsize)
-    ax.tick_params(axis='x', labelsize=label_fontsize - 4)
+    ax.tick_params(axis='x', labelsize=label_fontsize)
     ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=20))
     ax.set_ylabel("Tasks", fontsize=label_fontsize)
-    ax.set_title(title, fontsize=title_fontsize)
+    ax.set_title(title, fontsize=title_fontsize, y=1.005)
     ax.invert_yaxis()
     ax.grid(True, which="major", axis="x", linestyle="--", linewidth=0.5)
 
@@ -989,6 +989,7 @@ def visualize_schedule_only(
         label_fontsize=label_fontsize,
         time_scaling_factor=time_scaling_factor
     )
+    ax.set_xticks(np.arange(0, makespan + 1, 100)) # 100秒ごとにメモリを入れる
     ax.set_xlim(-8, makespan + 5) # ラベル表示用に左側のリミットを調整
 
     _draw_custom_legends(
