@@ -1294,7 +1294,7 @@ def _process_and_display_solution(
     visualize_schedule_only(
         solver, all_active_tasks, executed_tasks, task_starts,
         task_durations, selected_recipes, task_id_to_name, mode_to_name,
-        "Task Schedule Gantt Chart", recipe_to_caps_map, mode_to_resources_map,
+        "Task Delegation Schedule", recipe_to_caps_map, mode_to_resources_map,
         capability_color_map, resource_color_map, input_data=input_data,
         makespan=actual_makespan,
         title_fontsize=title_font_size, label_fontsize=label_font_size,
