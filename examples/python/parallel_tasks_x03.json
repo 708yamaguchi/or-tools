@@ -1,0 +1,38 @@
+{
+    "project_name": "Parallel task example",
+    "makespan_limit": 289.8,
+    "module_handling_time": 40,
+    "locations": [
+        {"name": "610", "max_robots": 99}
+    ],
+    "resources": {
+        "robot": [
+            {"name": "Robot", "quantity": 1, "capabilities": {"manip": 1}}
+        ],
+        "module": [
+            {"name": "Arm", "quantity": 3, "capabilities": {"manip": 1}}
+        ]
+    },
+    "tasks": [
+        {"name": "Wipe kitchen", "location": "610",
+         "modes": [
+             {"duration": 53.3, "required_capabilities": {"manip": 1}}
+         ]},
+        {"name": "Wipe IH", "location": "610",
+         "modes": [
+             {"duration": 63.3, "required_capabilities": {"manip": 1}}
+         ]},
+        {"name": "Wipe table1", "location": "610",
+         "modes": [
+             {"duration": 46.6, "required_capabilities": {"manip": 1}}
+         ]},
+        {"name": "Wipe table2", "location": "610",
+         "modes": [
+             {"duration": 46.6, "required_capabilities": {"manip": 1}}
+         ]},
+        {"name": "Wipe sink", "location": "610",
+         "modes": [
+             {"duration": 80, "required_capabilities": {"manip": 1}}
+         ]}
+    ]
+}
