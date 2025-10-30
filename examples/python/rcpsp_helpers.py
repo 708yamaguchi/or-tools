@@ -744,7 +744,9 @@ def _draw_custom_legends(fig, capability_color_map, resource_color_map, input_da
 
 
 def _plot_gantt_chart(
-    ax, solver, all_task_ids,
+    ax, solver,
+    y_axis_task_ids,         # Y軸定義用のタスクIDリスト (Workタスクのみ)
+    all_task_ids,        # 描画する全アクティビティIDリスト
     executed_tasks, task_starts, task_durations,
     selected_recipes, task_id_to_name,
     recipe_to_caps_map,
@@ -759,35 +761,48 @@ def _plot_gantt_chart(
     time_scaling_factor=1.0
 ):
     """視覚的に改善されたGanttチャートをmatplotlibのAxesオブジェクトにプロットします。"""
-    y_labels = [task_id_to_name.get(t, f"Task {t}") for t in all_task_ids]
+    # y_labels = [task_id_to_name.get(t, f"Task {t}") for t in all_task_ids]
 
     # --- 描画のための準備 ---
     robot_names = {r['name'] for r in input_data["resources"]["robot"]}
     module_names = {r['name'] for r in input_data["resources"]["module"]}
 
-    # --- 階層構造を持つY軸ラベルを生成 ---
+    # # --- 階層構造を持つY軸ラベルを生成 ---
+    # new_y_labels = []
+    # for i, t_id in enumerate(all_task_ids):
+    #     full_name = y_labels[i]
+    #     base_name = _get_base_task_name(full_name)
+    #     if full_name.startswith("Placement-"):
+    #         new_y_labels.append("  Placement")
+    #     elif full_name.startswith("Retrieval-"):
+    #         new_y_labels.append("  Retrieval")
+    #         if i + 1 < len(all_task_ids):
+    #              ax.axhline(y=i + 0.5, color='gray', linestyle=':', linewidth=1)
+    #     else:
+    #         new_y_labels.append(base_name)
+
+    # ax.set_yticks(range(len(new_y_labels)))
+
+    # # tick_labelsに、設定されたY軸ラベルオブジェクトのリストを格納。
+    # tick_labels = ax.set_yticklabels(new_y_labels, fontsize=label_fontsize - 4)
+    # for label in tick_labels:
+    #     text = label.get_text().strip()
+    #     if text == "Placement" or text == "Retrieval":
+    #         label.set_color('gray')
+    #         # label.set_alpha(0.7)
+
+    # Y軸のラベルと、基本タスク名からY座標へのマッピングを作成
+    y_coord_map = {}
     new_y_labels = []
-    for i, t_id in enumerate(all_task_ids):
-        full_name = y_labels[i]
-        base_name = _get_base_task_name(full_name)
-        if full_name.startswith("Placement-"):
-            new_y_labels.append("  Placement")
-        elif full_name.startswith("Retrieval-"):
-            new_y_labels.append("  Retrieval")
-            if i + 1 < len(all_task_ids):
-                 ax.axhline(y=i + 0.5, color='gray', linestyle=':', linewidth=1)
-        else:
-            new_y_labels.append(base_name)
+    for i, t_id in enumerate(y_axis_task_ids):
+        # t_id は "Work" タスクのID
+        base_name = _get_base_task_name(task_id_to_name[t_id])
+        new_y_labels.append(base_name)
+        # この基本タスク名はY座標 'i' に対応する
+        y_coord_map[base_name] = i
 
     ax.set_yticks(range(len(new_y_labels)))
-
-    # tick_labelsに、設定されたY軸ラベルオブジェクトのリストを格納。
-    tick_labels = ax.set_yticklabels(new_y_labels, fontsize=label_fontsize - 4)
-    for label in tick_labels:
-        text = label.get_text().strip()
-        if text == "Placement" or text == "Retrieval":
-            label.set_color('gray')
-            # label.set_alpha(0.7)
+    ax.set_yticklabels(new_y_labels, fontsize=label_fontsize - 4)
 
     # Y軸の表示範囲を全ラベルが収まるように設定することで、
     # durationが0で描画されないタスクのラベルも表示されるようになる
@@ -833,6 +848,12 @@ def _plot_gantt_chart(
     for i, t in enumerate(all_task_ids):
         task_name_full = task_id_to_name.get(t, f"Task {t}")
         base_task_name = _get_base_task_name(task_name_full)
+
+        # このアクティビティが属する基本タスクのY座標を取得
+        if base_task_name not in y_coord_map:
+            continue # Y軸にないタスクはスキップ
+        # これ以降、'i' がこのアクティビティを描画すべきY座標（行）となる
+        i = y_coord_map[base_task_name]
 
         if draw_capabilities:
             # 1. 要求Capabilityの楕円を左側に描画 (Placement/Retrievalでは省略)
@@ -967,6 +988,14 @@ def visualize_schedule_only(
 
     sorted_task_ids = sorted(list(all_active_tasks), key=sort_key)
 
+    # Y軸に表示する「基本タスク」（Workタスク）のみを抽出
+    y_axis_task_ids = [
+        t_id for t_id in sorted_task_ids
+        if task_id_to_name[t_id] not in ("Start", "Finish") and \
+           not task_id_to_name[t_id].startswith("Placement-") and \
+           not task_id_to_name[t_id].startswith("Retrieval-")
+    ]
+
     # 2. グラフ描画
     gantt_height = max(5, len(all_active_tasks) * 0.6)
     fig, ax = plt.subplots(figsize=(20, gantt_height))
@@ -975,7 +1004,10 @@ def visualize_schedule_only(
     fig.subplots_adjust(left=0.2, right=0.8)
 
     _plot_gantt_chart(
-        ax, solver, sorted_task_ids, set(executed_tasks),
+        ax, solver,
+        y_axis_task_ids,         # Y軸の定義に使うタスクリスト
+        sorted_task_ids,         # 描画対象の全アクティビティリスト
+        set(executed_tasks),
         task_starts, task_durations, selected_recipes,
         task_id_to_name,
         recipe_to_caps_map,
