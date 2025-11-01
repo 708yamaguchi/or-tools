@@ -373,7 +373,7 @@ class RcpspScheduler:
         step_plot_lines = plt.step(filtered_x, filtered_y, where='post', linestyle='-',
                                    label="Trade-off Boundary")
         plt.scatter(all_x, all_y, marker='o', zorder=3, s=50,
-                    label="Per-Module Minimum Makespans")
+                    label="Minimum Makespan per Arm Count")
         # グラフの上側と右側に直線を外挿
         min_x = min(p[0] for p in points)
         points_at_min_x = [p for p in points if p[0] == min_x]
@@ -387,15 +387,16 @@ class RcpspScheduler:
         plt.plot([start_point_up[0], start_point_up[0]], [start_point_up[1], ymax], linestyle='-', color=line_color)
         plt.plot([start_point_right[0], xmax], [start_point_right[1], start_point_right[1]], linestyle='-', color=line_color)
 
-        plt.title('Trade-off: Makespan vs. Required Modules', fontsize=32)
-        plt.xlabel('Makespan [s]', fontsize=24)
-        plt.ylabel('Required Modules', fontsize=24)
+        # 論文用に、タイトルはコメントアウト
+        # plt.title('Trade-off: Makespan vs. Required Arms', fontsize=32)
+        plt.xlabel('Makespan [s]', fontsize=32)
+        plt.ylabel('Number of Arms', fontsize=32)
         plt.xticks(fontsize=18)
         plt.yticks(fontsize=18)
         plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.grid(axis='x', linestyle=':', alpha=0.5)
         plt.gca().yaxis.set_major_locator(MaxNLocator(integer=True))
-        plt.legend(fontsize=18)
+        plt.legend(fontsize=28)
         plt.tight_layout()
         plt.show()
 
