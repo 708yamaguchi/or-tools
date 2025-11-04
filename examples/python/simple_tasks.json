@@ -1,0 +1,26 @@
+{
+    "project_name": "Simple task example",
+    "makespan_limit": 280,
+    "module_handling_time": 40,
+    "locations": [
+        {"name": "610", "max_robots": 99}
+    ],
+    "resources": {
+        "robot": [
+            {"name": "Robot", "quantity": 1, "capabilities": {"manip": 1}}
+        ],
+        "module": [
+            {"name": "Arm", "quantity": 1, "capabilities": {"manip": 1}}
+        ]
+    },
+    "tasks": [
+        {"name": "1", "location": "610",
+         "modes": [
+             {"duration": 150, "required_capabilities": {"manip": 1}}
+         ]},
+        {"name": "2", "location": "610",
+         "modes": [
+             {"duration": 200, "required_capabilities": {"manip": 1}}
+         ]}
+    ]
+}

@@ -919,6 +919,7 @@ def _plot_gantt_chart(
     ax.set_ylabel("Tasks", fontsize=label_fontsize)
     ax.set_title(title, fontsize=title_fontsize, y=1.005)
     ax.invert_yaxis()
+    # グラフに縦に入る点線を描画する。しない場合はコメントアウト
     ax.grid(True, which="major", axis="x", linestyle="--", linewidth=0.5)
 
 
