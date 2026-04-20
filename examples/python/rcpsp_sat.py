@@ -47,7 +47,7 @@ class RcpspScheduler:
         スケジューラのインスタンスを初期化します。
         """
         self.base_input_data = input_data
-        
+
         # =============================================================================
         # MODIFICATION: Calculate the time scaling factor upon initialization
         # =============================================================================
@@ -139,12 +139,12 @@ class RcpspScheduler:
             if show_results:
                 # 上方・下方スケーリングの両方に対応できる一般的なメッセージに変更
                 print(f"INFO: Scaling all time values by a factor of {self.time_scaling_factor} for the solver.")
-            
+
             # module_handling_timeのスケーリング
             m_time = current_input_data.get("module_handling_time")
             if m_time is not None:
                 current_input_data["module_handling_time"] = round(m_time * self.time_scaling_factor)
-            
+
             # 各タスクのdurationのスケーリング
             for task in current_input_data.get("tasks", []):
                 for mode in task.get("modes", []):
@@ -199,15 +199,38 @@ class RcpspScheduler:
         if status in (h.cp_model.OPTIMAL, h.cp_model.FEASIBLE):
             solver = results['solver']
             scaled_makespan = solver.value(results['task_starts'][results['sink']])
-            # =============================================================================
-            # MODIFICATION: De-scale the makespan to its original unit
-            # =============================================================================
             original_makespan = scaled_makespan / self.time_scaling_factor
             modules_used = int(solver.objective_value) if optimization_mode == 'MINIMIZE_MODULES' else 0
-            return {"status": status, "makespan": original_makespan, "modules": modules_used}
-        else:
-            return {"status": status, "makespan": float('inf'), "modules": float('inf')}
 
+            robot_work_count = 0
+            task_to_presence_literals = results['task_to_presence_literals']
+            all_active_tasks = results['all_active_tasks']
+            robot_names = [r["name"] for r in current_input_data.get("resources", {}).get("robot", [])]
+
+            for t in all_active_tasks:
+                task_name_full = self.task_id_to_name.get(t, "")
+                # Placement(配置)やRetrieval(回収)は除外して、Work(実際の作業)タスクのみを対象にする
+                if task_name_full.startswith("Placement-") or task_name_full.startswith("Retrieval-") or task_name_full in ("Start", "Finish"):
+                    continue
+
+                literals = task_to_presence_literals[t]
+                is_mandatory = (len(literals) == 1 and isinstance(literals[0], int))
+                is_optional_and_chosen = (not is_mandatory and sum(solver.value(lit) for lit in literals) == 1)
+
+                if is_mandatory or is_optional_and_chosen:
+                    recipe_idx = 0
+                    if len(literals) > 1:
+                        recipe_idx = next(r for r, lit in enumerate(literals) if solver.value(lit))
+
+                    # 選択されたモードの使用リソースを取得
+                    resources_used = mode_to_resources_map.get((task_name_full, recipe_idx), [])
+                    # リソースにロボットが含まれていればカウントアップ
+                    if any(r_name in robot_names for r_name in resources_used):
+                        robot_work_count += 1
+
+            return {"status": status, "makespan": original_makespan, "modules": modules_used, "robot_tasks": robot_work_count}
+        else:
+            return {"status": status, "makespan": float('inf'), "modules": float('inf'), "robot_tasks": 0}
 
     def _find_analysis_boundaries(self, module_name: str, show_results: bool = False) -> dict:
         """
@@ -499,26 +522,105 @@ class RcpspScheduler:
 
         plt.show()
 
+    def analyze_scaling(self, module_name: str = "Arm"):
+        """
+        タスクの時間を s 倍 (0.25 から 2.0) に変化させ、
+        最小makespan、最小モジュール数、ロボットの作業数を計算・出力します。
+        """
+        print(f"\n{'='*10} Starting Scaling Analysis {'='*10}")
+        print(f"Target module: '{module_name}'")
+        print("-" * 50)
+
+        # 0.25から2.0まで、0.25刻みにする場合
+        # s_values = [0.25 * i for i in range(1, 9)]
+        # 0.25から2.0まで、0.25刻みにする場合
+        # s_values = [0.05 * i for i in range(8, 18)]
+        # 0.25から2.0まで、0.01刻みにする場合
+        s_values = [round(0.01 * i, 2) for i in range(25, 201)]
+        results = []
+
+        for s in s_values:
+            current_input_data = copy.deepcopy(self.base_input_data)
+
+            for task in current_input_data.get("tasks", []):
+                for mode in task.get("modes", []):
+                    if mode.get("duration") is not None:
+                        # 浮動小数点演算の微小な誤差 (例: 140*1.1=154.00000000000003) を丸めて排除
+                        new_duration = round(mode["duration"] * s, 6)
+
+                        if new_duration.is_integer():
+                            mode["duration"] = int(new_duration)
+                        else:
+                            mode["duration"] = new_duration
+
+            temp_scheduler = RcpspScheduler(current_input_data)
+
+            res_makespan = temp_scheduler.solve('MINIMIZE_MAKESPAN', show_results=False)
+            if res_makespan["status"] not in (h.cp_model.OPTIMAL, h.cp_model.FEASIBLE):
+                print(f"s={s:.2f} : Could not find feasible makespan.")
+                continue
+
+            min_makespan = res_makespan["makespan"]
+
+            scaled_limit = int(min_makespan * temp_scheduler.time_scaling_factor)
+            res_modules = temp_scheduler.solve('MINIMIZE_MODULES', makespan_limit=scaled_limit, show_results=False)
+
+            if res_modules["status"] not in (h.cp_model.OPTIMAL, h.cp_model.FEASIBLE):
+                print(f"s={s:.2f} : Could not find feasible modules for makespan {min_makespan}.")
+                continue
+
+            min_modules = res_modules["modules"]
+            robot_tasks = res_modules["robot_tasks"]
+
+            results.append((s, min_makespan, min_modules, robot_tasks))
+
+        # --- 最大モジュール数の取得 ---
+        max_modules = next((m.get("quantity") for m in self.base_input_data.get("resources", {}).get("module", []) if m.get("name") == module_name), "Unknown")
+
+        # --- 結果の出力 ---
+        print(f"\n[INFO] Maximum available '{module_name}' modules in JSON config: {max_modules}")
+        print("\n--- Scaling Analysis Results ---")
+        print(f"{'Scale (s)':<10} | {'Min Makespan':<15} | {'Min Modules':<15} | {'Robot Tasks':<15}")
+        print("-" * 64)
+        for s, mksp, mod, rob_tasks in results:
+            print(f"{s:<10.2f} | {mksp:<15.2f} | {mod:<15} | {rob_tasks:<15}")
+
 # =============================================================================
 # Main Execution Block
 # =============================================================================
 def setup_arg_parser():
     """コマンドライン引数を定義し、パーサーオブジェクトを返します。"""
+    memo_text = """
+    ============================================================
+    【使い方メモ】
+    各モードは以下のように実行します：
+      $ python rcpsp_sat.py parallel_tasks.json makespan
+      $ python rcpsp_sat.py parallel_tasks.json scaling
+
+    ※注意点※
+    - JSONファイル内の `["resources"]["module"]["quantity"]` に設定されている
+      モジュール数の上限に注意してください（この上限を超えた並列化は行われません）。
+    ============================================================
+    """
+
     parser = argparse.ArgumentParser(
         description="RCPSP Scheduler",
-        formatter_class=argparse.RawTextHelpFormatter
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=memo_text
     )
 
     # --- グループ1: 基本引数 (全モード共通) ---
     base_group = parser.add_argument_group('Base Arguments (common to all modes)')
     base_group.add_argument("config_file", type=str, help="Path to the input JSON config file.")
-    base_group.add_argument("mode", type=str, choices=["makespan", "modules", "tradeoff", "potential", "correlation"],
+    base_group.add_argument("mode", type=str,
+                            choices=["makespan", "modules", "tradeoff", "potential", "correlation", "scaling"],
                             help="""Execution mode:
-- makespan: Minimize the total project time (makespan).
-- modules: Minimize the number of modules for a given makespan.
-- tradeoff: Analyze the trade-off between makespan and modules.
-- potential: Compare the analysis model's potential score with the scheduler's result.
-- correlation: Analyze the correlation between potential score and makespan reduction rate.""")
+                            - makespan: Minimize the total project time (makespan).
+                            - modules: Minimize the number of modules for a given makespan.
+                            - tradeoff: Analyze the trade-off between makespan and modules.
+                            - potential: Compare the analysis model's potential score with the scheduler's result.
+                            - correlation: Analyze the correlation between potential score and makespan reduction rate.
+                            - scaling: Analyze min makespan and min modules by scaling task durations.""")
     base_group.add_argument("--module-name", type=str, default="Arm",
                             help="Specify the target module name (default: 'Arm').")
 
@@ -537,7 +639,7 @@ def setup_arg_parser():
     # MODIFICATION: Change type to float to allow decimal values
     correlation_group.add_argument("--handling-times", type=float, nargs='+',
                                    help="List of module handling times to iterate over.")
-    
+
     return parser
 
 
@@ -606,6 +708,8 @@ def execute_mode(scheduler, args, module_name, input_data):
             arm_counts=args.arm_counts,
             handling_times=args.handling_times
         )
+    elif args.mode == "scaling":
+        scheduler.analyze_scaling(module_name=module_name)
 
 
 def main():

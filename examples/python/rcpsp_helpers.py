@@ -1593,6 +1593,7 @@ def solve_rcpsp(
         text_format.Parse(params, solver.parameters)
     solver.parameters.log_search_progress = verbose
     # solver.num_search_workers = 1  # 毎回同じ解を出力したいとき
+    solver.num_search_workers = 8
     status = solver.solve(model)
     results = { "solver": solver, "problem": problem, "all_active_tasks": all_active_tasks,
         "all_resources": all_resources, "source": source, "sink": sink,
