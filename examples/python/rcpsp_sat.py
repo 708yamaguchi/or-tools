@@ -537,6 +537,9 @@ class RcpspScheduler:
         # s_values = [0.05 * i for i in range(8, 18)]
         # 0.25から2.0まで、0.01刻みにする場合
         s_values = [round(0.01 * i, 2) for i in range(25, 201)]
+        # 0.5から0.6まで、0.001刻みにする場合
+        # s_values = [round(0.001 * i, 3) for i in range(500, 601)]
+
         results = []
 
         for s in s_values:
@@ -631,6 +634,8 @@ def setup_arg_parser():
     # MODIFICATION: Change type to float to allow decimal values
     override_group.add_argument("--handling-time", type=float,
                                 help="Override the module handling time from the config file.")
+    override_group.add_argument("--task-scale", type=float,
+                                help="Multiply only task durations by this factor (handling time remains unchanged).")
 
     # --- グループ3: Correlationモード専用引数 ---
     correlation_group = parser.add_argument_group('Correlation Mode Options (correlation mode ONLY)')
@@ -678,6 +683,19 @@ def load_and_prepare_config(args):
         print(f"INFO: Overriding handling time with command-line value: {args.handling_time}")
         config_data['module_handling_time'] = args.handling_time
 
+    # タスク時間のみのスケーリング（脱着時間はそのまま）
+    if args.task_scale is not None:
+        print(f"INFO: Scaling task durations by factor: {args.task_scale} (handling time unchanged)")
+        for task in config_data.get("tasks", []):
+            for mode in task.get("modes", []):
+                if mode.get("duration") is not None:
+                    # 浮動小数点演算の微小な誤差を丸めて排除
+                    new_duration = round(mode["duration"] * args.task_scale, 6)
+                    if new_duration.is_integer():
+                        mode["duration"] = int(new_duration)
+                    else:
+                        mode["duration"] = new_duration
+
     return config_data, module_name
 
 
@@ -724,8 +742,8 @@ def main():
     if not is_correlation_mode and (args.arm_counts is not None or args.handling_times is not None):
         parser.error("--arm-counts and --handling-times can only be used with 'correlation' mode.")
     # 'correlation'モード以外で使える引数が、'correlation'モードで使われていないかチェック
-    if is_correlation_mode and (args.arm_count is not None or args.handling_time is not None):
-        parser.error("--arm-count and --handling-time cannot be used with 'correlation' mode. Use --arm-counts and --handling-times instead.")
+    if is_correlation_mode and (args.arm_count is not None or args.handling_time is not None or args.task_scale is not None):
+        parser.error("--arm-count, --handling-time, and --task-scale cannot be used with 'correlation' mode. Use --arm-counts and --handling-times instead.")
     # 'correlation'モードで必須の引数が存在するかチェック
     if is_correlation_mode and (args.arm_counts is None or args.handling_times is None):
         parser.error("--arm-counts and --handling-times are REQUIRED for 'correlation' mode.")
